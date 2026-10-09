@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Production Schedule</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+</head>
+<body>
+<nav class="topnav">
+  <a class="brand" href="/" aria-label="Production Hub home"><img class="brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls"></a>
+  <div class="menu">
+    <button type="button" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menuList">⋮</button>
+    <div class="menu-list" id="menuList" hidden>
+      <a href="/">Home</a>
+      <a href="/schedule" aria-current="page">Production Schedule</a>
+      <a href="/requisitions">Raw Material Requisitions</a>
+      <a href="/samples">Sample Retention</a>
+      <a href="/collections">Stock Collections</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="page-head">
+    <div class="eyebrow">Mountain Falls · Production</div>
+    <h1>Production Schedule</h1>
+    <div class="sub">Today's production, filled in as it happens — with batch stock checked against what's been sent to each line.</div>
+  </div>
+
+  <div class="sync-banner" id="syncBanner">
+    <span class="dot"></span>
+    <span id="syncText">Loading…</span>
+  </div>
+
+  <div class="error-banner" id="errorBanner" hidden></div>
+
+  <div class="focus-bar" id="focusBar" hidden>
+    <a class="focus-back" href="/">← Production Hub</a>
+    <span class="focus-current">Showing: <b id="focusLabel"></b></span>
+    <button type="button" class="btn-ghost btn-small" id="showFullBtn">Show everything</button>
+  </div>
+
+  <div class="card card-pad" id="uploadScheduleSection" data-needs="edit">
+    <div class="section-title">Upload Production Schedule (CSV)</div>
+    <div class="filter-row">
+      <div class="field">
+        <input id="scheduleFileInput" type="file" accept=".csv,text/csv">
+      </div>
+      <button type="button" class="btn-primary btn-small" id="uploadScheduleBtn">Upload</button>
+      <a class="btn-ghost btn-small" href="/api/schedule/template.csv" download>Download template</a>
+    </div>
+    <div class="export-note" id="uploadStatus" hidden></div>
+  </div>
+
+  <div class="filter-row" id="jobListSection" data-view-ok>
+    <div class="field">
+      <label for="dateFilter">Production Date</label>
+      <input id="dateFilter" type="date">
+    </div>
+    <div class="field">
+      <label for="lineFilter">Warehouse</label>
+      <select id="lineFilter">
+        <option value="">All</option>
+        <option value="PRD - UWH">PRD - UWH — Upper Warehouse</option>
+        <option value="PRD - LWH">PRD - LWH — Lower Warehouse</option>
+        <option value="PRD - AQB">PRD - AQB — AcquaBoxe</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="statusFilter">Status</label>
+      <select id="statusFilter">
+        <option value="">All</option>
+        <option value="scheduled">Scheduled</option>
+        <option value="in_progress">In progress</option>
+        <option value="done">Done</option>
+        <option value="done_unexported">Done – not exported</option>
+        <option value="exported">Exported</option>
+      </select>
+    </div>
+    <button type="button" class="btn-ghost btn-small" id="showAllBtn">Show all dates</button>
+  </div>
+
+  <div class="export-note" id="reorderHint" style="margin-top:-8px;"></div>
+  <div class="job-list" id="jobList"></div>
+
+  <div class="card card-pad" id="addJobSection" data-needs="edit">
+    <div class="section-title">Add a product to the Production Schedule</div>
+    <form class="add-job" id="addJobForm">
+      <div class="field">
+        <label for="jobSku">Product Code</label>
+        <input id="jobSku" name="sku" list="skuList" placeholder="e.g. P500ST_MFSIG_PN" autocomplete="off" required>
+        <datalist id="skuList"></datalist>
+      </div>
+      <div class="field">
+        <label for="jobLine">Line</label>
+        <select id="jobLine" name="line">
+          <option value="PRD - UWH">PRD - UWH — Upper Warehouse</option>
+          <option value="PRD - LWH">PRD - LWH — Lower Warehouse</option>
+          <option value="PRD - AQB">PRD - AQB — AcquaBoxe</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="jobCases">Cases</label>
+        <input id="jobCases" name="plannedCases" type="number" min="1" step="1" placeholder="0" required>
+      </div>
+      <div class="field">
+        <label for="jobDate">Production Date</label>
+        <input id="jobDate" name="date" type="date" required>
+      </div>
+      <button type="submit" class="btn-primary">Add job</button>
+    </form>
+  </div>
+
+
+  <div class="card card-pad" id="exportSection" data-needs="unleashed">
+    <div class="section-title">Export to Unleashed</div>
+    <div class="filter-row">
+      <div class="field">
+        <label for="exportDate">Production Date</label>
+        <input id="exportDate" type="date">
+      </div>
+      <button type="button" class="btn-primary btn-small" id="exportCsvBtn">Export assemblies CSV</button>
+      <button type="button" class="btn-ghost btn-small" id="exportWastageBtn">Wastage CSV</button>
+      <button type="button" class="btn-ghost btn-small" id="sendBtn">Send to Unleashed instead</button>
+    </div>
+    <div class="export-note" id="sendResult" hidden></div>
+    <div class="export-note" id="exportHistory"></div>
+  </div>
+</div>
+<script type="module" src="/schedule.js"></script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Password</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  .account-form{display:flex; flex-direction:column; gap:14px; max-width:380px;}
+  .account-form button{align-self:flex-start;}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="brand" href="/" aria-label="Production Hub home"><img class="brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls"></a>
+  <div class="menu">
+    <button type="button" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menuList">⋮</button>
+    <div class="menu-list" id="menuList" hidden>
+      <a href="/">Home</a>
+      <a href="/schedule">Production Schedule</a>
+      <a href="/requisitions">Raw Material Requisitions</a>
+      <a href="/samples">Sample Retention</a>
+      <a href="/collections">Stock Collections</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="page-head">
+    <div class="eyebrow">Mountain Falls · Production</div>
+    <h1 id="title">My Password</h1>
+    <div class="sub" id="sub">Change the password you sign in with.</div>
+  </div>
+
+  <div class="error-banner" id="errorBanner" hidden></div>
+
+  <form class="card card-pad account-form" id="pwForm">
+    <div class="export-note" id="who" style="margin-top:0;"></div>
+    <div class="field" id="currentField">
+      <label for="current">Current password</label>
+      <input id="current" type="password" autocomplete="current-password">
+    </div>
+    <div class="field">
+      <label for="next">New password (at least 8 characters)</label>
+      <input id="next" type="password" autocomplete="new-password" minlength="8" required>
+    </div>
+    <div class="field">
+      <label for="again">New password again</label>
+      <input id="again" type="password" autocomplete="new-password" minlength="8" required>
+    </div>
+    <button type="submit" class="btn-primary" id="saveBtn">Save password</button>
+  </form>
+</div>
+<script type="module">
+  import { api, busy, showError, escapeHtml, me } from '/common.js';
+
+  const q = new URLSearchParams(location.search);
+  const first = q.get('first') === '1';
+  const next = (q.get('next') || '/').startsWith('/') && !(q.get('next') || '').startsWith('//') ? (q.get('next') || '/') : '/';
+
+  me.then((user) => {
+    if (!user) return;
+    if (user.shared) {
+      document.getElementById('pwForm').innerHTML = '<div class="export-note" style="margin-top:0;">You are signed in with the shared login. Its password is set on the server. Ask an admin for your own login.</div>';
+      return;
+    }
+    const must = first || user.mustChangePassword;
+    document.getElementById('who').innerHTML = 'Signed in as <b>' + escapeHtml(user.name) + '</b> (' + escapeHtml([user.email, user.cell].filter(Boolean).join(' / ')) + ')';
+    if (must) {
+      document.getElementById('title').textContent = 'Choose your password';
+      document.getElementById('sub').textContent = 'You signed in with a one-time password. Choose your own to carry on. You will use it from now on.';
+      document.getElementById('currentField').hidden = true;
+    }
+    document.getElementById('pwForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const nextPw = document.getElementById('next').value;
+      if (nextPw !== document.getElementById('again').value) return showError('The two new passwords are not the same.');
+      busy(document.getElementById('saveBtn'), 'Saving…', async () => {
+        await api('POST', '/me/password', { current: document.getElementById('current').value, next: nextPw });
+        location.href = must ? next : '/?password=changed';
+      });
+    });
+  });
+</script>
+</body>
+</html>

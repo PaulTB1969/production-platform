@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stock Collections</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  .tabs{display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid var(--border);}
+  .tabs button{background:none; border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 14px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.08em; font-size:12px;}
+  .tabs button[aria-selected="true"]{color:var(--text); border-bottom-color:var(--text);}
+  .tabs .chip{display:inline-block; margin-left:6px; font-size:10px; padding:1px 6px; border:1px solid var(--border-strong); border-radius:99px; letter-spacing:.02em; text-transform:none;}
+  .tabs .chip.loaded{color:var(--warn); border-color:var(--warn-soft-line);}
+  .tabs .chip.approved{color:var(--good); border-color:var(--good-soft-line);}
+  .sheet-section{margin-top:18px;}
+  table.sheet{width:100%; border-collapse:collapse; font-size:14px; background:var(--surface);}
+  table.sheet th, table.sheet td{border:1px solid var(--border-strong); padding:5px 8px; text-align:left; vertical-align:middle;}
+  table.sheet thead th{background:var(--surface-2); font-weight:600; font-size:12.5px; white-space:nowrap;}
+  table.sheet thead th.title{font-size:13.5px;}
+  table.sheet td.num, table.sheet th.num{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap;}
+  table.sheet td.sku{font-weight:500; white-space:nowrap;}
+  table.sheet td.sku small{display:block; font-weight:400; color:var(--text-faint); font-size:11.5px; white-space:normal;}
+  table.sheet input{padding:5px 7px; font-size:14px; border-radius:2px;}
+  table.sheet input.qty{width:80px; text-align:right;}
+  .batches{display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center;}
+  .bchip{display:inline-flex; align-items:center; gap:4px; font-family:var(--font-mono); font-size:12.5px; background:var(--surface-2); border:1px solid var(--border-strong); border-radius:3px; padding:2px 2px 2px 7px;}
+  .bchip b{font-weight:600;}
+  .badd{display:inline-flex; gap:4px; align-items:center; flex-wrap:wrap;}
+  .badd select{width:auto; max-width:330px; font-size:12.5px; padding:4px 6px;}
+  .badd input{font-size:13px; padding:4px 6px;}
+  .badd input.bother{width:150px;}
+  .badd input.bqty{width:70px;}
+  .bneed{color:var(--warn); font-size:12px;}
+  table.sheet td.other{color:var(--text-faint); font-size:12.5px;}
+  table.sheet tr.diff td.num.trf{color:var(--warn); font-weight:600;}
+  table.sheet tr.locked td{background:var(--surface-2);}
+  table.sheet .rm{background:none; border:0; color:var(--text-faint); padding:2px 6px; font-size:14px; text-transform:none;}
+  table.sheet .rm:hover{color:var(--danger);}
+  .sheet-foot{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:16px; padding-top:14px; border-top:1px solid var(--border);}
+  .sheet-foot .status{flex:1 1 220px; font-size:13px; color:var(--text-muted);}
+  .add-row{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+  .add-row input[type=text]{flex:1 1 240px;}
+  .add-row input[type=number]{flex:0 1 110px;}
+  @media print{
+    .topnav, .sync-banner, #uploadSection, .tabs, .sheet-foot, .add-row, #arrivalSection, .page-head .sub, .no-print, .rm{display:none !important;}
+    body{background:#fff; padding:0;} .card{border:0; box-shadow:none; padding:0;}
+    table.sheet input{border:0; padding:0; background:none;}
+  }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="brand" href="/" aria-label="Production Hub home"><img class="brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls"></a>
+  <div class="menu">
+    <button type="button" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menuList">⋮</button>
+    <div class="menu-list" id="menuList" hidden>
+      <a href="/">Home</a>
+      <a href="/schedule">Production Schedule</a>
+      <a href="/requisitions">Raw Material Requisitions</a>
+      <a href="/samples">Sample Retention</a>
+      <a href="/collections" aria-current="page">Stock Collections</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap" style="max-width:980px;">
+  <div class="page-head">
+    <div class="eyebrow">Mountain Falls · Dispatch</div>
+    <h1>Stock Collections</h1>
+  </div>
+
+  <div class="sync-banner" id="syncBanner"><span class="dot"></span><span id="syncText">Loading…</span></div>
+  <div class="error-banner" id="errorBanner" hidden></div>
+  <div class="focus-bar" id="focusBar" hidden>
+    <a class="focus-back" href="/">← Production Hub</a>
+    <span class="focus-current">Showing: <b id="focusLabel"></b></span>
+    <button type="button" class="btn-ghost btn-small" id="showFullBtn">Show everything</button>
+  </div>
+
+  <div class="card card-pad" id="sheetSection">
+    <div class="filter-row" style="margin-bottom:10px;" data-view-ok>
+      <div class="field">
+        <label for="dayDate">Collection date</label>
+        <input id="dayDate" type="date">
+      </div>
+      <button type="button" class="btn-ghost btn-small no-print" id="printBtn">Print this sheet</button>
+    </div>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div id="sheet"></div>
+  </div>
+
+  <div class="card card-pad" id="uploadSection" data-needs="edit">
+    <div class="section-title">Upload the collection list (CSV)</div>
+    <div class="filter-row">
+      <div class="field"><input id="collectionFileInput" type="file" accept=".csv,text/csv"></div>
+      <button type="button" class="btn-primary btn-small" id="uploadCollectionBtn">Upload</button>
+      <a class="btn-ghost btn-small" href="/api/collections/template.csv" download>Download template</a>
+    </div>
+    <div class="export-note">Columns: Date, Destination, SKU, Quantity — one row per SKU. Destination is a warehouse code (CPT, RML-JHB, ZARMI-JHB, PE, DBN…); "Digistics (Wed Collection)" goes into CPT. Uploading again updates the Qty Req of SKUs already on the list.</div>
+    <div class="export-note" id="uploadStatus" hidden></div>
+  </div>
+
+  <div class="card card-pad" id="arrivalSection">
+    <div class="section-title">Second leg — HLD → destination</div>
+    <div class="export-note" style="margin-top:-4px;">Once a delivery is confirmed, send everything waiting at HLD for that destination, both trucks together.</div>
+    <div id="arrivalPanel" style="margin-top:8px;"></div>
+    <div class="export-note" id="sendResult" hidden></div>
+  </div>
+</div>
+<datalist id="skuList"></datalist>
+<div id="batchLists" hidden></div>
+<script type="module" src="/collections.js"></script>
+</body>
+</html>

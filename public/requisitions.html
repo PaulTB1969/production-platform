@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raw Material Requisitions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+</head>
+<body>
+<nav class="topnav">
+  <a class="brand" href="/" aria-label="Production Hub home"><img class="brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls"></a>
+  <div class="menu">
+    <button type="button" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menuList">⋮</button>
+    <div class="menu-list" id="menuList" hidden>
+      <a href="/">Home</a>
+      <a href="/schedule">Production Schedule</a>
+      <a href="/requisitions" aria-current="page">Raw Material Requisitions</a>
+      <a href="/samples">Sample Retention</a>
+      <a href="/collections">Stock Collections</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="page-head">
+    <div class="eyebrow">Mountain Falls · Production</div>
+    <h1>Raw Material Requisitions</h1>
+    <div class="sub">Move raw materials from the Bulk Store to a production line, with batch numbers, ready for Unleashed.</div>
+  </div>
+
+  <div class="sync-banner" id="syncBanner">
+    <span class="dot"></span>
+    <span id="syncText">Loading…</span>
+  </div>
+
+  <div class="error-banner" id="errorBanner" hidden></div>
+
+  <div class="focus-bar" id="focusBar" hidden>
+    <a class="focus-back" href="/">← Production Hub</a>
+    <span class="focus-current">Showing: <b id="focusLabel"></b></span>
+    <button type="button" class="btn-ghost btn-small" id="showFullBtn">Show everything</button>
+  </div>
+
+  <div class="card card-pad" id="generateSection" data-needs="edit">
+    <div class="section-title">Generate Requisitions</div>
+    <div class="export-note" style="margin-top:-4px;">Creates one requisition per line from the Production Schedule's still-scheduled jobs for a date — jobs already in progress or completed are left out, and a line that already has a requisition for that date is left alone rather than overwritten. Raw materials that aren't batch-tracked are reduced by what's already at the line.</div>
+    <div class="filter-row" style="margin-top:10px;">
+      <div class="field">
+        <label for="genDate">Date</label>
+        <input id="genDate" type="date">
+      </div>
+      <button type="button" class="btn-primary btn-small" id="genRequestBtn">Generate</button>
+    </div>
+    <div class="export-note" id="genStatusNote" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="filter-row" id="reqListSection" data-view-ok>
+    <div class="field">
+      <label for="dateFilter">Requisition Date</label>
+      <input id="dateFilter" type="date">
+    </div>
+    <div class="field">
+      <label for="lineFilter">Line</label>
+      <select id="lineFilter">
+        <option value="">All</option>
+        <option value="PRD - UWH">PRD - UWH — Upper Warehouse</option>
+        <option value="PRD - LWH">PRD - LWH — Lower Warehouse</option>
+        <option value="PRD - AQB">PRD - AQB — AcquaBoxe</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="statusFilter">Status</label>
+      <select id="statusFilter">
+        <option value="">All</option>
+        <option value="scheduled">Scheduled</option>
+        <option value="done">Completed</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="groupFilter">Product group</label>
+      <select id="groupFilter">
+        <option value="">All</option>
+      </select>
+    </div>
+    <button type="button" class="btn-ghost btn-small" id="showAllBtn">Show all dates</button>
+    <button type="button" class="btn-primary btn-small" id="pickListBtn" title="Excel sheet to check the requisitions against the stock on the floor">Download pick list</button>
+  </div>
+
+  <div class="job-list" id="jobList"></div>
+
+  <div class="card card-pad" id="exportSection" data-needs="unleashed">
+    <div class="section-title">Send to Unleashed</div>
+    <div class="filter-row">
+      <div class="field">
+        <label for="exportDate">Requisition Date</label>
+        <input id="exportDate" type="date">
+      </div>
+      <button type="button" class="btn-primary btn-small" id="sendBtn">Send to Unleashed</button>
+      <button type="button" class="btn-ghost btn-small" id="exportCsvBtn">Download CSV instead</button>
+    </div>
+    <div class="export-note">Every requisition marked Completed for that date becomes a <b>Parked</b> Warehouse Transfer in Unleashed, from PRD to its line, with each batch number on its line. Complete it in Unleashed once the stock has moved — that is what makes the batches available to the line's assemblies.</div>
+    <div class="export-note" id="sendResult" hidden></div>
+    <div class="export-note" id="exportHistory"></div>
+  </div>
+
+  <div class="card card-pad" id="balanceSection" data-view-ok>
+    <div class="section-title">Raw Material Balance</div>
+    <div class="export-note" style="margin-top:-4px;">For raw materials that aren't batch-tracked in Unleashed: how much has been sent to each line by completed requisitions, versus how much the Production Schedule has recorded as used (including wastage). Always current — the balance carries forward into the next requisition.</div>
+    <div id="balanceList" style="margin-top:12px;"></div>
+  </div>
+</div>
+<datalist id="skuList"></datalist>
+<script type="module" src="/requisitions.js"></script>
+</body>
+</html>

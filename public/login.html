@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · Production Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  .login-wrap{max-width:380px; margin:8vh auto 0; display:flex; flex-direction:column; gap:20px;}
+  .login-logo{height:40px; width:auto; align-self:flex-start;}
+  .login-form{display:flex; flex-direction:column; gap:14px;}
+  .login-form button{width:100%; padding:13px 14px;}
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="page-head">
+    <img class="login-logo brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls">
+    <div class="eyebrow" style="margin-top:12px;">Mountain Falls · Production</div>
+    <h1>Sign in</h1>
+    <div class="sub">This device stays signed in for 90 days.</div>
+  </div>
+
+  <div class="error-banner" id="errorBanner" hidden></div>
+
+  <form class="card card-pad login-form" method="post" action="/login">
+    <input type="hidden" name="next" id="next" value="/">
+    <div class="field">
+      <label for="username">Email or cell number</label>
+      <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn-primary">Sign in</button>
+  </form>
+</div>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.getElementById('next').value = q.get('next') || '/';
+  const messages = {
+    wrong: 'That sign-in or password is not right — try again.',
+    locked: 'Too many attempts from this device. Wait 15 minutes, then try again.',
+    'shared-off': 'The shared login has been switched off — sign in with your own email or cell number.',
+  };
+  if (messages[q.get('error')]) {
+    const el = document.getElementById('errorBanner');
+    el.textContent = messages[q.get('error')];
+    el.hidden = false;
+  }
+</script>
+</body>
+</html>

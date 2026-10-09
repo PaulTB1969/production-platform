@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sample Retention</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  .tabs{display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid var(--border); margin-bottom:14px;}
+  .tabs button{background:none; border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 14px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.08em; font-size:12px;}
+  .tabs button[aria-selected="true"]{color:var(--text); border-bottom-color:var(--text);}
+  .tabs .chip{display:inline-block; margin-left:6px; font-size:10px; padding:1px 6px; border:1px solid var(--border-strong); border-radius:99px; letter-spacing:.02em; text-transform:none;}
+  .tabs .chip.signed{color:var(--warn); border-color:var(--warn-soft-line);}
+  .tabs .chip.signed_off{color:var(--good); border-color:var(--good-soft-line);}
+
+  .form-title{font-weight:600; text-decoration:underline; line-height:1.5; margin:4px 0 12px;}
+  table.samples{width:100%; border-collapse:collapse; font-size:14px; background:var(--surface);}
+  table.samples th, table.samples td{border:1px solid var(--border-strong); padding:5px 8px; text-align:left; vertical-align:middle;}
+  table.samples thead th, table.samples tr.section th{background:var(--surface-2); font-weight:600; font-size:13px;}
+  table.samples td.sku{font-weight:500; white-space:nowrap;}
+  table.samples td.sku small{display:block; font-weight:400; color:var(--text-faint); font-size:11.5px; white-space:normal;}
+  table.samples td.sku .off{color:var(--warn); font-size:11px; font-weight:500;}
+  table.samples th.c, table.samples td.c{text-align:center; width:110px;}
+  .yn{display:inline-flex; border:1px solid var(--border-strong); border-radius:var(--radius); overflow:hidden;}
+  .yn button{background:var(--surface); border:0; border-radius:0; padding:6px 12px; min-width:38px; font-size:13px; letter-spacing:0; color:var(--text-muted);}
+  .yn button + button{border-left:1px solid var(--border-strong);}
+  .yn button.on-Y{background:var(--good-soft); color:var(--good); font-weight:600;}
+  .yn button.on-N{background:var(--danger-soft); color:var(--danger); font-weight:600;}
+  table.samples input[type=time]{padding:5px 6px; font-size:14px; width:100px;}
+  .val-Y{color:var(--good); font-weight:600;} .val-N{color:var(--danger); font-weight:600;}
+
+  .sign-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px;}
+  .sign-box{border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; background:var(--surface); display:flex; flex-direction:column; gap:10px;}
+  .sign-box h3{margin:0; font-size:12.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted);}
+  .pad-wrap{position:relative;}
+  .pad{width:100%; height:130px; border:1px dashed var(--border-strong); border-radius:var(--radius); background:#fff; touch-action:none; display:block; cursor:crosshair;}
+  .pad-hint{position:absolute; left:10px; bottom:8px; font-size:11px; color:#999; pointer-events:none;}
+  .sig-img{max-width:240px; max-height:90px; background:#fff; border:1px solid var(--border); border-radius:var(--radius); padding:4px;}
+  .signed-line{font-size:13.5px;}
+  .row-actions{display:flex; flex-wrap:wrap; gap:8px;}
+  @media (max-width:640px){
+    .sign-grid{grid-template-columns:1fr;}
+    table.samples th.c, table.samples td.c{width:auto;}
+    table.samples input[type=time]{width:88px;}
+    .yn button{padding:6px 9px; min-width:32px;}
+  }
+
+  /* ---------- printed form (Doc No 128) ---------- */
+  #printArea{display:none;}
+  @media print{
+    @page{size:A4; margin:12mm 14mm;}
+    body{background:#fff !important; padding:0 !important;}
+    body > *:not(#printArea){display:none !important;}
+    #printArea{display:block; color:#000; font-family:Calibri, Arial, sans-serif;}
+  }
+  .pf-page{height:270mm; display:flex; flex-direction:column; break-after:page; page-break-after:always;}
+  .pf-page:last-child{break-after:auto; page-break-after:auto;}
+  .pf-head{width:100%; border-collapse:collapse; font-family:Arial, sans-serif; font-size:10.5pt;}
+  .pf-head td{border:1px solid #000; padding:5px 7px; height:24px;}
+  .pf-head .logo img{height:32px; display:block; margin:0 auto;}
+  .pf-head .center{text-align:center; font-weight:bold;}
+  .pf-title{margin:22px 0 22px 30px; font-weight:bold; text-decoration:underline; font-size:11pt; line-height:1.35;}
+  .pf-table{width:calc(100% - 60px); margin-left:30px; border-collapse:collapse; font-size:13pt;}
+  .pf-table th, .pf-table td{border:1px solid #000; padding:2px 6px; height:26px;}
+  .pf-table td{border-bottom-color:#4aa3df;}
+  .pf-table th{background:#d9d9d9; text-align:left; border-bottom:2px solid #000;}
+  .pf-table th.c, .pf-table td.c{text-align:center; width:15%;}
+  .pf-table .sku{width:52%;}
+  .pf-sign{margin:60px 0 0 30px; font-size:11pt; line-height:2.2;}
+  .pf-sign .line{display:inline-block; min-width:95mm; border-bottom:1px solid #000; vertical-align:bottom; line-height:1.4;}
+  .pf-sign img{height:38px; vertical-align:bottom;}
+  .pf-foot{margin:auto 0 0 30px; width:calc(100% - 60px); border-bottom:1px solid #000; font-size:11pt; padding-bottom:2px; display:flex; align-items:flex-end; gap:12px;}
+  .pf-foot img{height:38px;}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="brand" href="/" aria-label="Production Hub home"><img class="brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls"></a>
+  <div class="menu">
+    <button type="button" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menuList">⋮</button>
+    <div class="menu-list" id="menuList" hidden>
+      <a href="/">Home</a>
+      <a href="/schedule">Production Schedule</a>
+      <a href="/requisitions">Raw Material Requisitions</a>
+      <a href="/samples" aria-current="page">Sample Retention</a>
+      <a href="/collections">Stock Collections</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="page-head">
+    <div class="eyebrow">Mountain Falls · Food Safety System · Doc No 128</div>
+    <h1>Sample Retention</h1>
+    <div class="sub">The day's products from the Production Schedule. Fill in and sign on screen, or print a blank form to complete by hand.</div>
+  </div>
+
+  <div class="error-banner" id="errorBanner" hidden></div>
+
+  <div class="card card-pad">
+    <div class="filter-row" data-view-ok style="margin-bottom:12px;">
+      <div class="field">
+        <label for="sampleDate">Production date</label>
+        <input id="sampleDate" type="date">
+      </div>
+      <button type="button" class="btn-ghost btn-small" id="printFilledBtn">Print this form</button>
+      <button type="button" class="btn-ghost btn-small" id="printBlankBtn">Print blank</button>
+      <button type="button" class="btn-ghost btn-small" id="printBlankAllBtn">Print blank — all forms</button>
+    </div>
+    <div class="tabs" role="tablist" id="tabs" data-view-ok></div>
+    <div id="sheet"></div>
+  </div>
+</div>
+<div id="printArea"></div>
+<script type="module" src="/samples.js"></script>
+</body>
+</html>

@@ -1,0 +1,485 @@
+// Stock Collection screen, laid out like the paper sheets: the day's LIST
+// (sections with SKU + Qty Req), and one SHEET per truck where the
+// warehouse fills in Qty Trf and Batch for what went on that truck. Mark
+// Loaded, then Approve (send or CSV) -> one transfer per section. The
+// second leg HLD -> destination is one transfer per destination.
+//
+// Inputs save as you go without redrawing the table, so Tab moves straight
+// from Qty Trf to Batch to the next row.
+
+import { api, todayStr, escapeHtml, fmtNum, fmtTimestamp, showError, download, busy, confirmClick, setupFocus, renderSyncBanner } from './common.js';
+
+const DESTINATIONS = [
+  ['CPT', 'Cape Town'], ['RML-JHB', 'RM Logistics JHB'], ['ZARMI-JHB', 'Johannesburg - Zarmi'],
+  ['PE', 'Port Elizabeth'], ['DBN', 'Durban'], ['JBAY', "Jeffery's Bay"], ['HER', 'Hermanus Sales'], ['PND', 'Pending Warehouse Orders'],
+];
+const TRUCKS = ['RML', 'MFE'];
+const SHEET_TEXT = { open: 'Being loaded', loaded: 'Loaded — waiting for approval', approved: 'Approved' };
+
+const state = { date: null, tab: 'list', day: null, stock: { products: [], batches: {} } };
+
+const sheetStatus = (s) => (s?.approvedAt ? 'approved' : s?.loadedAt ? 'loaded' : 'open');
+const sheetOf = (truck) => state.day.sheets.find((s) => s.truck === truck);
+const loadOf = (line, truck) => line.loads.find((x) => x.truck === truck);
+const loadedTotal = (line) => line.loads.reduce((s, x) => s + (Number(x.qty) || 0), 0);
+const toFirst = (c) => (c.viaHolding ? 'HLD' : c.warehouse);
+
+// ---------- loading ----------
+
+async function loadDay() {
+  if (!state.date) return;
+  const [day, stock] = await Promise.all([
+    api('GET', '/collections/day?date=' + state.date),
+    api('GET', '/collections/stock?date=' + state.date),
+  ]);
+  state.day = day;
+  state.stock = stock;
+  document.getElementById('skuList').innerHTML = stock.products.map((p) =>
+    '<option value="' + escapeHtml(p.sku) + '" label="' + escapeHtml(p.description + (p.onHand !== null ? ' · ' + fmtNum(p.onHand) + ' in PRD' : '')) + '">').join('');
+  render();
+}
+
+// ---------- rendering ----------
+
+function render() {
+  renderTabs();
+  const el = document.getElementById('sheet');
+  el.innerHTML = state.tab === 'list' ? renderList() : renderTruck(state.tab);
+}
+
+function renderTabs() {
+  const chip = (t) => {
+    const s = sheetStatus(sheetOf(t));
+    return s === 'open' ? '' : '<span class="chip ' + s + '">' + (s === 'approved' ? 'approved' : 'loaded') + '</span>';
+  };
+  document.getElementById('tabs').innerHTML =
+    '<button type="button" role="tab" data-tab="list" aria-selected="' + (state.tab === 'list') + '">List</button>' +
+    TRUCKS.map((t) => '<button type="button" role="tab" data-tab="' + t + '" aria-selected="' + (state.tab === t) + '">' + t + ' sheet' + chip(t) + '</button>').join('');
+}
+
+function sectionTitle(c) {
+  return 'Stock Collection ' + escapeHtml(c.destination) +
+    ' <span style="font-weight:400;color:var(--text-faint);">· ' + escapeHtml(c.label) + ' · to ' + escapeHtml(toFirst(c)) + '</span>';
+}
+
+// The list: Qty Req per SKU, what each truck took, what's left.
+function renderList() {
+  const cs = state.day.collections;
+  let out = cs.length ? '' : '<div class="empty">No collection list for this date yet — upload it below, or add a section.</div>';
+  for (const c of cs) {
+    out += '<div class="sheet-section"><table class="sheet"><thead><tr>' +
+      '<th class="title">' + sectionTitle(c) + '</th><th class="num">Qty Req</th>' +
+      TRUCKS.map((t) => '<th class="num">' + t + '</th>').join('') + '<th class="num">Left</th><th></th></tr></thead><tbody>' +
+      c.lines.map((l) => {
+        const left = l.qty - loadedTotal(l);
+        const locked = l.loads.some((x) => x.dispatchId);
+        return '<tr data-line="' + l.id + '">' +
+          '<td class="sku">' + escapeHtml(l.sku) + (l.description && l.description !== l.sku ? '<small>' + escapeHtml(l.description) + '</small>' : '') + '</td>' +
+          '<td class="num"><input class="qty" type="number" min="1" step="1" data-req="' + l.id + '" value="' + l.qty + '"></td>' +
+          TRUCKS.map((t) => { const x = loadOf(l, t); return '<td class="num">' + (x && x.qty ? fmtNum(x.qty) : '') + '</td>'; }).join('') +
+          '<td class="num" style="' + (left > 0 ? 'color:var(--warn);' : left < 0 ? 'color:var(--danger);' : 'color:var(--good);') + '">' + (left === 0 ? '✓' : fmtNum(left)) + '</td>' +
+          '<td>' + (locked ? '' : '<button type="button" class="rm" data-rm-line="' + l.id + '" title="Remove">✕</button>') + '</td></tr>';
+      }).join('') +
+      '</tbody></table>' +
+      '<div class="add-row"><input type="text" list="skuList" placeholder="Add a SKU to ' + escapeHtml(c.destination) + ' — type its code" data-add-sku="' + c.destination + '" autocomplete="off">' +
+      '<input type="number" min="1" step="1" placeholder="Qty Req" data-add-qty="' + c.destination + '"><button type="button" class="btn-ghost btn-small" data-add="' + c.destination + '">Add</button>' +
+      (c.dispatches.length ? '' : '<button type="button" class="btn-danger-ghost btn-small" data-del-section="' + c.id + '">Remove ' + escapeHtml(c.destination) + ' section</button>') + '</div></div>';
+  }
+  // Adding a destination that isn't on the day's list yet. Destinations
+  // already on it get their SKUs from the "Add a SKU to …" row under their table.
+  const missing = DESTINATIONS.filter(([code]) => !cs.some((c) => c.destination === code));
+  if (missing.length) {
+    out += '<div class="section-title" style="margin-top:22px;">Add another destination to this day\'s list</div>' +
+      '<div class="add-row" style="margin-top:0;"><select id="newSection" style="flex:0 1 240px;">' +
+      missing.map(([code, label]) => '<option value="' + code + '">' + code + ' — ' + escapeHtml(label) + '</option>').join('') +
+      '</select><input type="text" list="skuList" placeholder="its first SKU" id="newSectionSku" autocomplete="off"><input type="number" min="1" step="1" placeholder="Qty Req" id="newSectionQty">' +
+      '<button type="button" class="btn-ghost btn-small" id="addSectionBtn">Add destination</button></div>' +
+      (cs.length ? '<div class="export-note">Destinations already on the list (' + escapeHtml(cs.map((c) => c.destination).join(', ')) + ') aren\'t offered here — add their SKUs with the row under their table.</div>' : '');
+  }
+  return out;
+}
+
+// A truck sheet: the same list, with Qty Trf and Batch for this truck.
+// ---------- batches on a line ----------
+// Same format as the sheets: "20261007" or "20261007 (215) 20261005 (1)".
+function parseBatches(text, qty) {
+  const t = String(text || '').trim();
+  if (!t) return [];
+  const parts = [...t.matchAll(/(.+?)\s*\(\s*(\d+(?:\.\d+)?)\s*\)/g)];
+  if (!parts.length) return [{ batch: t, qty: qty === undefined || qty === null ? null : Number(qty) }];
+  return parts.map((m) => ({ batch: m[1].trim(), qty: Number(m[2]) }));
+}
+function formatBatches(entries) {
+  const list = entries.filter((e) => String(e.batch || '').trim());
+  if (list.length === 1) return list[0].batch.trim();
+  return list.map((e) => e.batch.trim() + ' (' + Number(e.qty) + ')').join(' ');
+}
+const entriesOf = (x) => parseBatches(x?.batch, x?.qty);
+
+// How much of a batch is already on today's sheets (every line and truck),
+// leaving out one load — the one being edited.
+function allocated(sku, batch, exceptLoadId) {
+  let n = 0;
+  for (const c of state.day.collections) {
+    for (const l of c.lines) {
+      if (l.sku !== sku) continue;
+      for (const x of l.loads) {
+        if (x.id === exceptLoadId) continue;
+        for (const e of entriesOf(x)) if (e.batch === batch) n += Number(e.qty ?? x.qty) || 0;
+      }
+    }
+  }
+  return n;
+}
+
+function batchOptionsFor(l, x) {
+  const list = state.stock.batches[l.sku] || [];
+  return '<option value="">+ batch…</option>' + list.map((b) => {
+    const used = allocated(l.sku, b.batchNumber, x?.id);
+    const where = b.source === 'unleashed' ? fmtNum(b.qty) + ' in PRD' : fmtNum(b.qty) + ' cases · ' + (b.note || 'schedule');
+    const left = b.qty - used;
+    return '<option value="' + escapeHtml(b.batchNumber) + '" data-left="' + left + '">' + escapeHtml(b.batchNumber + ' — ' + where +
+      (used ? ' · ' + fmtNum(used) + ' on today\'s sheets → ' + fmtNum(left) + ' left' : '')) + '</option>';
+  }).join('') + '<option value="__other">other batch (type it)…</option>';
+}
+
+function truckRow(c, l, truck, status) {
+  const other = TRUCKS.find((t) => t !== truck);
+  const x = loadOf(l, truck);
+  const o = loadOf(l, other);
+  const locked = status === 'approved' || !!x?.dispatchId;
+  const entries = entriesOf(x);
+  const multi = entries.length > 1;
+  const diff = x && x.qty && x.qty !== l.qty - (o?.qty || 0) && loadedTotal(l) !== l.qty;
+  const qtyCell = locked
+    ? '<td class="num trf">' + (x?.qty ? fmtNum(x.qty) : '') + '</td>'
+    : '<td class="num trf"><input class="qty" type="number" min="0" step="1" data-trf="' + l.id + '" value="' + (x?.qty ?? '') + '"' +
+      (multi ? ' readonly title="The sum of the batch quantities"' : '') + '></td>';
+  let batchCell;
+  if (locked) {
+    batchCell = '<td>' + escapeHtml(x?.batch || '') + '</td>';
+  } else {
+    const chips = entries.map((e, i) => '<span class="bchip">' + escapeHtml(e.batch) +
+      (multi ? ' <b>' + fmtNum(e.qty) + '</b>' : '') +
+      '<button type="button" class="rm" data-rm-batch="' + l.id + '" data-i="' + i + '" title="Remove this batch">✕</button></span>').join('');
+    batchCell = '<td><div class="batches">' + chips +
+      '<span class="badd"><select class="bpick" data-batch-pick="' + l.id + '">' + batchOptionsFor(l, x) + '</select>' +
+      '<input class="bother" type="text" placeholder="batch" hidden>' +
+      '<input class="bqty qty" type="number" min="0" step="1" placeholder="qty" title="Quantity from this batch">' +
+      '<button type="button" class="btn-ghost btn-small" data-batch-add="' + l.id + '">Add</button></span>' +
+      (!entries.length && l.needsBatch && x?.qty ? '<span class="bneed">batch needed</span>' : '') +
+      '</div></td>';
+  }
+  return '<tr class="' + (locked ? 'locked' : '') + (diff ? ' diff' : '') + '" data-line="' + l.id + '" data-coll="' + c.id + '">' +
+    '<td class="sku">' + escapeHtml(l.sku) + '</td><td class="num">' + fmtNum(l.qty) + '</td>' + qtyCell + batchCell +
+    '<td class="num other">' + (o?.qty ? fmtNum(o.qty) : '') + '</td></tr>';
+}
+
+// A truck sheet: the same list, with Qty Trf and Batch for this truck.
+function renderTruck(truck) {
+  const s = sheetOf(truck);
+  const status = sheetStatus(s);
+  const cs = state.day.collections;
+  if (!cs.length) return '<div class="empty">No collection list for this date yet.</div>';
+  const other = TRUCKS.find((t) => t !== truck);
+  let out = '';
+  for (const c of cs) {
+    out += '<div class="sheet-section"><table class="sheet"><thead><tr>' +
+      '<th class="title">' + sectionTitle(c) + '</th><th class="num">Qty Req</th><th class="num">Qty Trf</th><th>Batch</th><th class="num">' + other + '</th></tr></thead><tbody>' +
+      c.lines.map((l) => truckRow(c, l, truck, status)).join('') + '</tbody></table>';
+    const ds = c.dispatches.filter((d) => d.truck === truck);
+    if (ds.length) {
+      out += '<div class="export-note">' + ds.map((d) => d.exportedAt
+        ? (d.guid ? 'Sent' : 'Exported by CSV') + ' as <b>' + escapeHtml(d.transferNumber || '') + '</b> (PRD → ' + escapeHtml(toFirst(c)) + ') ' + escapeHtml(fmtTimestamp(d.exportedAt))
+        : '<span style="color:var(--danger);">Not in Unleashed yet' + (d.sendError ? ': ' + escapeHtml(d.sendError) : '') + '</span>').join(' · ') + '</div>';
+    }
+    out += '</div>';
+  }
+  out += '<div class="sheet-foot"><div class="status" id="sheetStatus">' + statusLine(truck) + '</div>' + sheetButtons(truck, status) + '</div>';
+  return out;
+}
+
+function statusLine(truck) {
+  const s = sheetOf(truck);
+  const status = sheetStatus(s);
+  const lines = state.day.collections.flatMap((c) => c.lines.map((l) => ({ c, l, x: loadOf(l, truck) }))).filter((r) => r.x && r.x.qty > 0);
+  const missing = lines.filter((r) => r.l.needsBatch && !String(r.x.batch || '').trim());
+  let t = '<b>' + SHEET_TEXT[status] + '</b> · ' + lines.length + ' SKU line(s), ' + fmtNum(lines.reduce((u, r) => u + Number(r.x.qty), 0)) + ' units on ' + truck;
+  if (status === 'loaded') t += ' · marked loaded ' + escapeHtml(fmtTimestamp(s.loadedAt));
+  if (status === 'approved') t += ' · approved ' + escapeHtml(fmtTimestamp(s.approvedAt));
+  if (missing.length && status === 'open') t += '<br><span style="color:var(--warn);">Batch still needed: ' + escapeHtml(missing.map((r) => r.c.destination + ' ' + r.l.sku).join(', ')) + '</span>';
+  return t;
+}
+
+function sheetButtons(truck, status) {
+  const csvApproved = state.day.collections.some((c) => c.dispatches.some((d) => d.truck === truck && d.exportedAt && !d.guid));
+  const unsent = state.day.collections.some((c) => c.dispatches.some((d) => d.truck === truck && !d.exportedAt));
+  if (status === 'open') return '<button type="button" class="btn-primary btn-small" data-loaded="' + truck + '">Mark ' + truck + ' loaded</button>';
+  if (status === 'loaded') {
+    return '<button type="button" class="btn-ghost btn-small" data-unloaded="' + truck + '">Back to loading</button>' +
+      '<button type="button" class="btn-primary btn-small" data-approve="' + truck + '">Approve &amp; send to Unleashed</button>' +
+      (unsent ? '' : '<button type="button" class="btn-ghost btn-small" data-approve-csv="' + truck + '">Approve by CSV</button>');
+  }
+  return csvApproved ? '<button type="button" class="btn-ghost btn-small" data-undo-csv="' + truck + '" title="Only if the CSV was not uploaded to Unleashed">Undo CSV approval</button>' : '';
+}
+
+// ---------- saving as you type ----------
+
+function replaceCollection(c) {
+  const i = state.day.collections.findIndex((x) => x.id === c.id);
+  if (i >= 0) state.day.collections[i] = c; else state.day.collections.push(c);
+}
+
+const sheetEl = document.getElementById('sheet');
+
+const findLine = (lineId) => {
+  for (const c of state.day.collections) { const l = c.lines.find((x) => x.id === Number(lineId)); if (l) return { c, l }; }
+  return {};
+};
+
+// Saves Qty Trf + batches for a line on this truck, then redraws that row
+// (and the status line) only, so the rest of the sheet keeps its place.
+async function saveLoad(lineId, { qty, batch }, refocus) {
+  const truck = state.tab;
+  try {
+    replaceCollection(await api('PUT', '/collections/lines/' + lineId + '/loads/' + truck, { qty, batch }));
+  } catch (err) { showError(err.message); }
+  const { c, l } = findLine(lineId);
+  const row = sheetEl.querySelector('tr[data-line="' + lineId + '"]');
+  if (c && row) row.outerHTML = truckRow(c, l, truck, sheetStatus(sheetOf(truck)));
+  const st = document.getElementById('sheetStatus');
+  if (st) st.innerHTML = statusLine(truck);
+  if (refocus) sheetEl.querySelector('tr[data-line="' + lineId + '"] ' + refocus)?.focus();
+}
+
+// Qty Trf typed: keep the batches (a single batch simply takes the new qty).
+function saveQty(input) {
+  const { l } = findLine(input.dataset.trf);
+  const x = loadOf(l, state.tab);
+  const qty = input.value === '' ? null : Number(input.value);
+  saveLoad(input.dataset.trf, { qty, batch: x?.batch || '' });
+}
+
+// Adds a batch (with its quantity) to the line; several batches set Qty Trf.
+function addBatch(lineId) {
+  const row = sheetEl.querySelector('tr[data-line="' + lineId + '"]');
+  const pick = row.querySelector('.bpick');
+  const batch = (pick.value === '__other' ? row.querySelector('.bother').value : pick.value).trim();
+  if (!batch) { showError('Pick a batch first.'); return; }
+  const { l } = findLine(lineId);
+  const x = loadOf(l, state.tab);
+  const entries = entriesOf(x).map((e) => ({ ...e, qty: e.qty ?? x.qty }));
+  const typed = row.querySelector('.bqty').value;
+  // No quantity typed: the first batch takes Qty Trf; later ones take what's still needed.
+  const have = entries.reduce((s, e) => s + (Number(e.qty) || 0), 0);
+  const qty = typed !== '' ? Number(typed) : (entries.length ? Math.max(0, (x?.qty || 0) - have) : (x?.qty || 0));
+  if (entries.length && !(qty > 0)) { showError('Enter how many come from batch ' + batch + '.'); return; }
+  const same = entries.find((e) => e.batch === batch);
+  if (same) same.qty += qty; else entries.push({ batch, qty });
+  const total = entries.length > 1 ? entries.reduce((s, e) => s + Number(e.qty), 0) : (qty || x?.qty || null);
+  saveLoad(lineId, { qty: total, batch: formatBatches(entries) }, '.bpick');
+}
+
+function removeBatch(lineId, i) {
+  const { l } = findLine(lineId);
+  const x = loadOf(l, state.tab);
+  const entries = entriesOf(x).map((e) => ({ ...e, qty: e.qty ?? x.qty }));
+  entries.splice(i, 1);
+  const total = entries.length > 1 ? entries.reduce((s, e) => s + Number(e.qty), 0) : (entries[0]?.qty ?? x?.qty ?? null);
+  saveLoad(lineId, { qty: total, batch: formatBatches(entries) });
+}
+
+sheetEl.addEventListener('change', async (e) => {
+  const trf = e.target.closest('[data-trf]');
+  if (trf) { if (!trf.readOnly) saveQty(trf); return; }
+  const pick = e.target.closest('.bpick');
+  if (pick) {
+    const row = pick.closest('tr');
+    const other = row.querySelector('.bother');
+    other.hidden = pick.value !== '__other';
+    if (!other.hidden) other.focus();
+    else row.querySelector('.bqty').focus();
+    return;
+  }
+  const req = e.target.closest('[data-req]');
+  if (req) {
+    try { replaceCollection(await api('PATCH', '/collections/lines/' + req.dataset.req, { qty: Number(req.value) })); }
+    catch (err) { showError(err.message); render(); }
+  }
+});
+
+// Enter in a sheet cell moves down to the same column on the next row;
+// Enter in an "Add a SKU" row adds it.
+sheetEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !e.target.matches('input')) return;
+  const addRow = e.target.closest('.add-row');
+  if (addRow) {
+    e.preventDefault();
+    addRow.querySelector('[data-add], #addSectionBtn')?.click();
+    return;
+  }
+  if (e.target.matches('.bqty, .bother')) {
+    e.preventDefault();
+    addBatch(e.target.closest('tr').dataset.line);
+    return;
+  }
+  const attr = ['data-trf', 'data-req'].find((a) => e.target.hasAttribute(a));
+  if (!attr) return;
+  e.preventDefault();
+  const inputs = [...sheetEl.querySelectorAll('input[' + attr + ']')];
+  const next = inputs[inputs.indexOf(e.target) + 1];
+  e.target.dispatchEvent(new Event('change', { bubbles: true }));
+  if (next) next.focus();
+});
+
+sheetEl.addEventListener('click', async (e) => {
+  const date = state.date;
+  const ba = e.target.closest('[data-batch-add]');
+  if (ba) { addBatch(ba.dataset.batchAdd); return; }
+  const br = e.target.closest('[data-rm-batch]');
+  if (br) { removeBatch(br.dataset.rmBatch, Number(br.dataset.i)); return; }
+  const add = e.target.closest('[data-add]');
+  if (add) {
+    const dest = add.dataset.add;
+    const sku = sheetEl.querySelector('[data-add-sku="' + dest + '"]').value.trim();
+    const qty = Number(sheetEl.querySelector('[data-add-qty="' + dest + '"]').value);
+    if (!sku || !(qty > 0)) { showError('Enter a SKU and a Qty Req.'); return; }
+    try { replaceCollection(await api('POST', '/collections/list', { date, destination: dest, lines: [{ sku, qty }] })); await loadDay(); }
+    catch (err) { showError(err.message); }
+    return;
+  }
+  if (e.target.id === 'addSectionBtn') {
+    const dest = document.getElementById('newSection').value;
+    const sku = document.getElementById('newSectionSku').value.trim();
+    const qty = Number(document.getElementById('newSectionQty').value);
+    if (!dest || !sku || !(qty > 0)) { showError('Pick a destination and enter its first SKU and Qty Req.'); return; }
+    try { await api('POST', '/collections/list', { date, destination: dest, lines: [{ sku, qty }] }); await loadDay(); }
+    catch (err) { showError(err.message); }
+    return;
+  }
+  const rm = e.target.closest('[data-rm-line]');
+  if (rm) {
+    try { replaceCollection(await api('DELETE', '/collections/lines/' + rm.dataset.rmLine)); render(); } catch (err) { showError(err.message); }
+    return;
+  }
+  const del = e.target.closest('[data-del-section]');
+  if (del) {
+    confirmClick(del, async () => {
+      try { await api('DELETE', '/collections/' + encodeURIComponent(del.dataset.delSection)); await loadDay(); } catch (err) { showError(err.message); }
+    });
+    return;
+  }
+  for (const [attr, run] of [
+    ['data-loaded', (t) => api('POST', '/collections/sheets/' + t + '/loaded', { date, loaded: true })],
+    ['data-unloaded', (t) => api('POST', '/collections/sheets/' + t + '/loaded', { date, loaded: false })],
+  ]) {
+    const b = e.target.closest('[' + attr + ']');
+    if (b) { busy(b, 'Saving…', async () => { await run(b.getAttribute(attr)); await loadDay(); }); return; }
+  }
+  const ap = e.target.closest('[data-approve]');
+  if (ap) {
+    busy(ap, 'Sending…', async () => {
+      try { showResults((await api('POST', '/collections/sheets/' + ap.dataset.approve + '/send', { date })).results); }
+      finally { await loadDay(); await renderArrivals(); }
+    });
+    return;
+  }
+  const csv = e.target.closest('[data-approve-csv]');
+  if (csv) {
+    busy(csv, 'Exporting…', async () => {
+      const exp = await api('POST', '/collections/sheets/' + csv.dataset.approveCsv + '/csv', { date });
+      download(exp.url);
+      await loadDay(); await renderArrivals();
+    });
+    return;
+  }
+  const undo = e.target.closest('[data-undo-csv]');
+  if (undo) {
+    confirmClick(undo, async () => {
+      try { await api('POST', '/collections/sheets/' + undo.dataset.undoCsv + '/undo-csv', { date }); } catch (err) { showError(err.message); }
+      await loadDay(); await renderArrivals();
+    });
+  }
+});
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]');
+  if (!b) return;
+  state.tab = b.dataset.tab;
+  render();
+});
+
+// ---------- second leg ----------
+
+function showResults(results) {
+  const el = document.getElementById('sendResult');
+  el.hidden = false;
+  el.innerHTML = results.map((r) => r.ok
+    ? '✓ ' + escapeHtml(r.destination + (r.truck ? ' (' + r.truck + ')' : '')) + ' → ' + escapeHtml(r.to || '') + ': ' + escapeHtml(r.number || 'sent') + (r.recovered ? ' (found in Unleashed — not sent twice)' : ' (Parked)')
+    : '<span style="color:var(--danger);">✕ ' + escapeHtml(r.destination) + ': ' + escapeHtml(r.error) + '</span>').join('<br>');
+  el.scrollIntoView({ block: 'nearest' });
+}
+
+async function renderArrivals() {
+  const list = await api('GET', '/collections/arrivals');
+  document.getElementById('arrivalPanel').innerHTML = list.length
+    ? list.map((a) => {
+      const units = a.items.reduce((s, i) => s + Number(i.qty), 0);
+      return '<div class="usage-line wrap"><span class="batch-no">' + escapeHtml(a.destination + ' — ' + a.label) + '</span>' +
+        '<span>' + escapeHtml(a.date + ' · ' + a.trucks.join(' + ') + ' · ' + a.items.length + ' line(s), ' + fmtNum(units) + ' units') + '</span>' +
+        '<span style="margin-left:auto;display:flex;gap:6px;">' +
+          '<button type="button" class="btn-primary btn-small" data-arrival="' + a.collectionId + '">Arrived — send HLD → ' + escapeHtml(a.destination) + '</button>' +
+          (a.unconfirmed ? '' : '<button type="button" class="btn-ghost btn-small" data-arrival-csv="' + a.collectionId + '">CSV</button>') +
+        '</span></div>';
+    }).join('')
+    : '<div class="empty-lines">Nothing waiting at HLD.</div>';
+}
+
+document.getElementById('arrivalPanel').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-arrival]');
+  if (b) {
+    busy(b, 'Sending…', async () => {
+      try { showResults([await api('POST', '/collections/' + encodeURIComponent(b.dataset.arrival) + '/arrival/send', {})]); }
+      finally { await renderArrivals(); }
+    });
+    return;
+  }
+  const c = e.target.closest('[data-arrival-csv]');
+  if (c) {
+    busy(c, 'Exporting…', async () => {
+      const exp = await api('POST', '/collections/' + encodeURIComponent(c.dataset.arrivalCsv) + '/arrival/csv', {});
+      download(exp.url);
+      await renderArrivals();
+    });
+  }
+});
+
+// ---------- upload, print, boot ----------
+
+document.getElementById('uploadCollectionBtn').addEventListener('click', (e) => {
+  const input = document.getElementById('collectionFileInput');
+  const file = input.files && input.files[0];
+  if (!file) { showError('Choose a CSV file first.'); return; }
+  busy(e.target, 'Uploading…', async () => {
+    const r = await api('POST', '/collections/upload', await file.text());
+    input.value = '';
+    const s = document.getElementById('uploadStatus');
+    s.hidden = false;
+    s.textContent = 'Uploaded: ' + r.lines + ' line(s) in ' + r.sections + ' section(s).';
+    await loadDay();
+  });
+});
+
+document.getElementById('printBtn').addEventListener('click', () => window.print());
+
+document.getElementById('dayDate').addEventListener('change', (e) => {
+  state.date = e.target.value || null;
+  loadDay().catch((err) => showError(err.message));
+});
+
+state.date = todayStr();
+document.getElementById('dayDate').value = state.date;
+setupFocus({}, {}, []);
+renderSyncBanner();
+loadDay().catch((err) => showError('Could not load the collection: ' + err.message));
+renderArrivals().catch(() => {});

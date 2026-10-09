@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Production Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Production">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+</head>
+<body>
+<nav class="topnav">
+  <a class="brand" href="/" aria-label="Production Hub home"><img class="brand-logo" src="/brand/mf-logo.png" alt="Mountain Falls"></a>
+  <div class="menu">
+    <button type="button" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menuList">⋮</button>
+    <div class="menu-list" id="menuList" hidden>
+      <a href="/" aria-current="page">Home</a>
+      <a href="/schedule">Production Schedule</a>
+      <a href="/requisitions">Raw Material Requisitions</a>
+      <a href="/samples">Sample Retention</a>
+      <a href="/collections">Stock Collections</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="page-head">
+    <div class="eyebrow">Mountain Falls · Hermanus</div>
+    <h1>Production Hub</h1>
+    <div class="sub">Plan the day's production, send raw materials to the lines, and export to Unleashed.</div>
+  </div>
+
+  <div class="error-banner" id="deniedBanner" hidden></div>
+  <div class="hub-grid">
+    <div class="card hub-card" data-area="schedule">
+      <h2><a href="/schedule">Production Schedule</a></h2>
+      <ul>
+        <li data-needs="edit"><a href="/schedule#uploadScheduleSection">Upload Production Schedule (CSV)</a></li>
+        <li><a href="/schedule#jobListSection">Update Production Schedule</a></li>
+        <li data-needs="unleashed"><a href="/schedule#exportSection">Export assemblies &amp; wastage</a></li>
+      </ul>
+    </div>
+    <div class="card hub-card" data-area="requisitions">
+      <h2><a href="/requisitions">Raw Material Requisitions</a></h2>
+      <ul>
+        <li data-needs="edit"><a href="/requisitions#generateSection">Generate requisitions</a></li>
+        <li><a href="/requisitions#reqListSection">Update a requisition</a></li>
+        <li data-needs="unleashed"><a href="/requisitions#exportSection">Export transfers</a></li>
+        <li><a href="/requisitions#balanceSection">Raw material balance</a></li>
+      </ul>
+    </div>
+    <div class="card hub-card" data-area="collections">
+      <h2><a href="/collections">Stock Collections</a></h2>
+      <ul>
+        <li><a href="/collections">Today's list &amp; truck sheets</a></li>
+        <li><a href="/collections#arrivalSection">Second leg — HLD → destination</a></li>
+      </ul>
+    </div>
+    <div class="card hub-card" data-area="samples">
+      <h2><a href="/samples">Sample Retention</a></h2>
+      <ul>
+        <li><a href="/samples">Fill in and sign today's sample forms</a></li>
+        <li><a href="/samples">Print blank or completed forms</a></li>
+      </ul>
+    </div>
+    <div class="card hub-card">
+      <h2>Unleashed</h2>
+      <div class="export-note" id="syncText" style="margin-top:0;">Checking…</div>
+      <div><button type="button" class="btn-ghost btn-small" id="syncNowBtn">Sync now</button></div>
+    </div>
+    <div class="card hub-card" id="usersCard" hidden>
+      <h2><a href="/users">Users &amp; Roles</a></h2>
+      <ul>
+        <li><a href="/users#usersSection">Add or change a user</a></li>
+        <li><a href="/users#rolesSection">Edit what each role can do</a></li>
+        <li><a href="/users#activitySection">Who did what</a></li>
+      </ul>
+    </div>
+    <div class="card hub-card" id="excelSection">
+      <h2>Download as Excel</h2>
+      <div class="export-note" style="margin-top:0;">Schedule, batch usage, requisitions, line stock and balances in one workbook — a read-only copy for reporting.</div>
+      <div class="row2">
+        <div class="field"><label for="xlFrom">From</label><input id="xlFrom" type="date"></div>
+        <div class="field"><label for="xlTo">To</label><input id="xlTo" type="date"></div>
+      </div>
+      <div><a class="btn-primary btn-small" id="xlDownload" href="/api/workbook.xlsx" download>Download workbook</a></div>
+    </div>
+  </div>
+  <div class="error-banner" id="errorBanner" hidden></div>
+  <form method="post" action="/logout" style="text-align:center;">
+    <button type="submit" class="btn-ghost btn-small">Sign out of this device</button>
+  </form>
+</div>
+<span id="syncBanner" hidden></span>
+<script type="module">
+  import { api, busy, renderSyncBanner, todayStr, me } from '/common.js';
+  renderSyncBanner();
+
+  // Only the areas this person's role can open; on a view-only area, no
+  // upload/add/export links.
+  me.then((user) => {
+    if (!user) return;
+    for (const card of document.querySelectorAll('[data-area]')) {
+      const level = user.areas?.[card.dataset.area] || 'none';
+      if (level === 'none') card.remove();
+      else if (level === 'view') card.querySelectorAll('[data-needs]').forEach((li) => li.remove());
+    }
+    if (!user.actions?.unleashed) document.querySelectorAll('[data-needs="unleashed"]').forEach((li) => li.remove());
+    document.getElementById('usersCard').hidden = !user.actions?.manageUsers;
+  });
+  const denied = new URLSearchParams(location.search).get('denied');
+  if (denied) {
+    const names = { schedule: 'the Production Schedule', requisitions: 'Raw Material Requisitions', collections: 'Stock Collections', samples: 'Sample Retention', users: 'Users & Roles' };
+    const el = document.getElementById('deniedBanner');
+    el.textContent = `Your role does not give you access to ${names[denied] || 'that page'} — ask an admin if you need it.`;
+    el.hidden = false;
+    history.replaceState(null, '', '/');
+  }
+
+  // Default range: this month so far.
+  const xlFrom = document.getElementById('xlFrom');
+  const xlTo = document.getElementById('xlTo');
+  const xlLink = document.getElementById('xlDownload');
+  xlTo.value = todayStr();
+  xlFrom.value = todayStr().slice(0, 8) + '01';
+  const updateLink = () => { xlLink.href = `/api/workbook.xlsx?from=${xlFrom.value}&to=${xlTo.value}`; };
+  xlFrom.addEventListener('change', updateLink);
+  xlTo.addEventListener('change', updateLink);
+  updateLink();
+  document.getElementById('syncNowBtn').addEventListener('click', (e) =>
+    busy(e.target, 'Syncing…', async () => { await api('POST', '/unleashed/sync'); await renderSyncBanner(); }));
+</script>
+</body>
+</html>

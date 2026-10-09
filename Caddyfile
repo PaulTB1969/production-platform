@@ -1,0 +1,11 @@
+{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}
+
+# The temporary address used before production.mountainfalls.co.za existed
+# (Oct 2026). Sends old bookmarks and home-screen icons to the real one.
+# Safe to delete once nobody uses it.
+169-58-117-153.sslip.io {
+	redir https://{$SITE_DOMAIN}{uri} permanent
+}
