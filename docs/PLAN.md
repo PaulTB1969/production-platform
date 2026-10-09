@@ -80,7 +80,7 @@ Each site has a tracking mode of **batch / serial / both / none**.
 ## Phases
 
 0. **New repository:** code copied from production-hub, Mountain Falls' artifacts and keys removed. ✔
-1. **Platform foundation:**
+1. **Platform foundation** ✔ (admin console at `/admin`; create the first admin with `npm run admin:create`):
    - platform admin login and console;
    - customers and sites, with encrypted keys;
    - Test & import from Unleashed;

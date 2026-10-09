@@ -16,13 +16,15 @@ export function loadConfig(env = process.env) {
       apiId: env.UNLEASHED_API_ID || null,
       apiKey: env.UNLEASHED_API_KEY || null,
       baseUrl: env.UNLEASHED_BASE_URL || 'https://api.unleashedsoftware.com',
-      clientType: env.UNLEASHED_CLIENT_TYPE || 'mountainfalls/production-hub',
+      clientType: env.UNLEASHED_CLIENT_TYPE || 'production-platform',
       // Minutes between automatic syncs of BOMs and batch stock. 0 = off.
       syncIntervalMinutes: Number(env.UNLEASHED_SYNC_MINUTES ?? 60),
     },
     // Goes in the Production Person Email column of both schedule exports,
     // as in the artifact (per-person attribution isn't used yet).
     productionEmail: env.PRODUCTION_EMAIL || 'nicolette@mountainfalls.co.za',
+    // Encrypts customers' Unleashed API keys in the database (see secrets.js).
+    masterKey: env.MASTER_KEY || null,
     isProduction: env.NODE_ENV === 'production',
   };
 
@@ -30,6 +32,7 @@ export function loadConfig(env = process.env) {
     const missing = [];
     if (!config.databaseUrl) missing.push('DATABASE_URL');
     if (!config.auth.user || !config.auth.password) missing.push('APP_USER / APP_PASSWORD');
+    if (!config.masterKey) missing.push('MASTER_KEY');
     if (missing.length) throw new Error(`Missing required settings in production: ${missing.join(', ')}`);
   }
   return config;

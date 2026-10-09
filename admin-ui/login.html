@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Platform Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  .login-wrap{max-width:380px; margin:8vh auto 0; display:flex; flex-direction:column; gap:20px;}
+  .login-form{display:flex; flex-direction:column; gap:14px;}
+  .login-form button{width:100%; padding:13px 14px;}
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="page-head">
+    <div class="eyebrow">Production Platform</div>
+    <h1>Admin sign in</h1>
+    <div class="sub">For looking after customers and their Unleashed accounts.</div>
+  </div>
+  <div class="error-banner" id="errorBanner" hidden></div>
+  <form class="card card-pad login-form" method="post" action="/admin/login">
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn-primary">Sign in</button>
+  </form>
+</div>
+<script>
+  const e = new URLSearchParams(location.search).get('error');
+  const msg = { wrong: 'That email or password is not right.', locked: 'Too many attempts. Wait 15 minutes, then try again.' }[e];
+  if (msg) { const b = document.getElementById('errorBanner'); b.textContent = msg; b.hidden = false; }
+</script>
+</body>
+</html>

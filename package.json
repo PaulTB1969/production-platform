@@ -1,8 +1,8 @@
 {
-  "name": "production-hub",
+  "name": "production-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "Mountain Falls production planning: schedule, stock requisitions and Unleashed integration.",
+  "description": "Production floor management for Unleashed: schedules, requisitions, logistics and QC, for several customers and Unleashed accounts.",
   "type": "module",
   "main": "src/index.js",
   "engines": {
@@ -14,7 +14,8 @@
     "migrate": "node --env-file-if-exists=.env src/db/migrate.js",
     "test": "node --test \"test/**/*.test.js\"",
     "unleashed:probe": "node --env-file-if-exists=.env src/unleashed/probe.js",
-    "seed": "node --env-file-if-exists=.env src/db/seed.js"
+    "seed": "node --env-file-if-exists=.env src/db/seed.js",
+    "admin:create": "node --env-file-if-exists=.env scripts/create-admin.js"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
