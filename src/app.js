@@ -24,7 +24,7 @@ export function createApp({ db, config, createClient }) {
   const auth = createAuth({ db, masterKey, createClient: clientFor, secure });
 
   // Platform admin console — its own sign-in, ahead of the customer login.
-  app.use('/admin', adminRouter({ db, masterKey, createClient: clientFor, secure, supportCookie: auth.supportCookie }));
+  app.use('/admin', adminRouter({ db, masterKey, createClient: clientFor, secure, supportCookie: auth.supportCookie, importWaitsForProducts: !!config.importWaitsForProducts }));
 
   // Bodies are read before the sign-in guard: the guard puts the rest of the
   // request "inside" its site, and reading a body afterwards would lose that.

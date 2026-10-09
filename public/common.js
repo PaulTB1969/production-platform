@@ -207,11 +207,37 @@ me.then((user) => {
     if (user.actions?.manageUsers) {
       list.insertAdjacentHTML('beforeend', '<a href="/users"' + (location.pathname.startsWith('/users') ? ' aria-current="page"' : '') + '>Users &amp; Roles</a>');
     }
+    // Site: name, and a switcher when the user works on more than one.
+    const sites = user.sites || [];
     list.insertAdjacentHTML('beforeend',
+      '<div class="menu-who">Site: <b>' + escapeHtml(user.site?.name || '') + '</b></div>' +
+      (sites.length > 1 && !user.support
+        ? sites.filter((s) => s.id !== user.site?.id).map((s) =>
+          '<button type="button" class="menu-signout" data-switch-site="' + s.id + '">Switch to ' + escapeHtml(s.name) + '</button>').join('')
+        : '') +
       '<div class="menu-who">Signed in as <b>' + escapeHtml(user.name) + '</b>' +
-      (user.shared ? '' : ' · ' + escapeHtml(user.roleName)) + '</div>' +
-      (user.shared ? '' : '<a href="/account">My password</a>') +
+      (user.roleName && !user.support ? ' · ' + escapeHtml(user.roleName) : '') + '</div>' +
+      (user.support ? '' : '<a href="/account">My password</a>') +
       '<form method="post" action="/logout"><button type="submit" class="menu-signout">Sign out</button></form>');
+    list.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-switch-site]');
+      if (!b) return;
+      await api('POST', '/me/site', { siteId: Number(b.dataset.switchSite) });
+      location.href = '/';
+    });
+  }
+
+  // Platform support: always visible, with the way out.
+  if (user.support) {
+    const until = new Date(user.support.expiresAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    document.body.insertAdjacentHTML('afterbegin',
+      '<div class="support-banner">Platform support session — <b>' + escapeHtml(user.name.replace(/ \(support\)$/, '')) + '</b> · ' +
+      (user.support.mode === 'edit' ? '<b>can make changes</b>' : 'view only') + ' · until ' + escapeHtml(until) +
+      ' · <button type="button" id="endSupportBtn">End session</button></div>');
+    document.getElementById('endSupportBtn').addEventListener('click', async () => {
+      await api('POST', '/support/end');
+      location.href = '/login';
+    });
   }
 
   // Line pickers: only the user's lines.

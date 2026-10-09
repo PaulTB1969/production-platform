@@ -39,6 +39,8 @@ activity_log              + site_id, + support flag
 every data table          + site_id NOT NULL, with every query limited to the current site
 ```
 
+**As built (step 2):** instead of a `site_id` column on every table, each site's tables live in their own Postgres schema (`site_<id>`), with the platform tables in `public`. Requests run inside their site (AsyncLocalStorage), so the production code needs no site filters and can't reach another site's data. Roles and the activity log are per site; users and site access are platform-wide.
+
 **Unleashed API keys:** encrypted with AES-256-GCM, using a master key held in the server's environment (`MASTER_KEY`). They are never sent back to the browser. They can be replaced but not viewed.
 
 ## Import from Unleashed (checked against the live API, read-only)
@@ -85,7 +87,7 @@ Each site has a tracking mode of **batch / serial / both / none**.
    - customers and sites, with encrypted keys;
    - Test & import from Unleashed;
    - the tracking-mode indicator.
-2. **Tenancy:**
+2. **Tenancy** ✔ — each site in its own Postgres schema; requests run inside their site:
    - `site_id` on every table, and every query limited to the current site;
    - an Unleashed client and hourly sync for each site;
    - users, with access to several sites and a site switcher;

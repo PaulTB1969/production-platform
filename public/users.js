@@ -1,12 +1,12 @@
-// Users & Roles: add people, set their role and lines, edit what each role
-// can do, switch the shared login off, and see who did what.
+// Users & Roles: add people, give them access to this site with a role and
+// lines, edit what each role can do, platform support access, and who did what.
 
 import { api, busy, confirmClick, showError, escapeHtml, fmtTimestamp, lineShortCode, LINE_LABELS, me } from '/common.js';
 
 const AREAS = [['schedule', 'Production Schedule'], ['requisitions', 'Raw Material Requisitions'], ['collections', 'Stock Collections'], ['samples', 'Sample Retention']];
 const ACTIONS = [['unleashed', 'Send to Unleashed / export CSVs'], ['approve', 'Approve truck sheets'], ['samplesSignOff', 'Sign off sample forms'], ['manageUsers', 'Manage users & roles']];
 
-const state = { users: [], roles: [], lines: [], sharedLoginEnabled: true, editing: null, me: null };
+const state = { users: [], roles: [], lines: [], site: null, supportSessions: [], editing: null, me: null };
 const $ = (id) => document.getElementById(id);
 
 async function load() {
@@ -14,7 +14,7 @@ async function load() {
   Object.assign(state, data);
   renderUsers();
   renderRoles();
-  renderShared();
+  renderSupport();
   renderActivityPeople();
 }
 
@@ -30,14 +30,16 @@ function renderUsers() {
     list.innerHTML = '<div class="empty">No users yet. Add yourself first, with the Admin role.</div>';
     return;
   }
+  $('siteName').textContent = state.site?.name || 'this site';
   list.innerHTML = state.users.map((u) => {
     const status = !u.active ? 'Switched off'
       : u.mustChangePassword ? 'Waiting for first sign-in'
       : u.lastLoginAt ? 'Last signed in ' + fmtTimestamp(u.lastLoginAt) : 'Active';
-    const lines = u.lines.length ? u.lines.map(lineShortCode).join(', ') : 'All lines';
-    return '<div class="person' + (u.active ? '' : ' off') + '">' +
-      '<div class="who">' + escapeHtml(u.name) + ' <span class="pill pill-line">' + escapeHtml(u.roleName) + '</span></div>' +
-      '<div class="meta">' + escapeHtml(signInText(u)) + ' · ' + escapeHtml(lines) + ' · ' + escapeHtml(status) + '</div>' +
+    const lines = !u.hasAccess ? 'No access to this site' : u.lines.length ? u.lines.map(lineShortCode).join(', ') : 'All lines';
+    const others = u.otherSites.length ? ' · also ' + u.otherSites.join(', ') : '';
+    return '<div class="person' + (u.active && u.hasAccess ? '' : ' off') + '">' +
+      '<div class="who">' + escapeHtml(u.name) + ' <span class="pill pill-line">' + escapeHtml(u.roleName || 'no access') + '</span></div>' +
+      '<div class="meta">' + escapeHtml(signInText(u)) + ' · ' + escapeHtml(lines) + ' · ' + escapeHtml(status) + escapeHtml(others) + '</div>' +
       '<div class="actions"><button type="button" class="btn-ghost btn-small" data-edit-user="' + u.id + '">Edit</button></div>' +
       '</div>';
   }).join('');
@@ -60,11 +62,22 @@ function openUserForm(user) {
     escapeHtml(LINE_LABELS[l] || l) + '</label>').join('');
   $('uActive').checked = user ? user.active : true;
   $('uActiveField').hidden = !user;
+  $('uAccess').checked = user ? user.hasAccess : true;
+  $('uAccessField').hidden = !user;
+  syncAccessFields();
   $('resetPwBtn').hidden = !user;
   $('saveUserBtn').textContent = user ? 'Save' : 'Add and make a one-time password';
   $('userForm').hidden = false;
   $('uName').focus();
 }
+
+// Role and lines only matter with access to this site.
+function syncAccessFields() {
+  const on = $('uAccess').checked;
+  $('uRole').disabled = !on;
+  for (const i of $('uLines').querySelectorAll('input')) i.disabled = !on;
+}
+$('uAccess').addEventListener('change', syncAccessFields);
 
 function closeUserForm() {
   $('userForm').hidden = true;
@@ -74,7 +87,7 @@ function closeUserForm() {
 function showOtp(user, password) {
   const box = $('otpBox');
   box.innerHTML = '<div class="otp">One-time password for <b>' + escapeHtml(user.name) + '</b>: <code>' + escapeHtml(password) + '</code><br>' +
-    'They sign in at production.mountainfalls.co.za with <b>' + escapeHtml(signInText(user)) + '</b> and this password, then choose their own. ' +
+    'They sign in at ' + escapeHtml(location.host) + ' with <b>' + escapeHtml(signInText(user)) + '</b> and this password, then choose their own. ' +
     'It is shown only now, so pass it on before leaving this page. ' +
     '<button type="button" class="btn-ghost btn-small" id="copyOtpBtn">Copy</button></div>';
   box.hidden = false;
@@ -101,6 +114,7 @@ $('userForm').addEventListener('submit', (e) => {
     roleId: Number($('uRole').value),
     lines: [...$('uLines').querySelectorAll('input:checked')].map((i) => i.value),
     active: state.editing ? $('uActive').checked : true,
+    hasAccess: state.editing ? $('uAccess').checked : true,
   };
   busy($('saveUserBtn'), 'Saving…', async () => {
     if (state.editing) {
@@ -183,22 +197,26 @@ $('roleList').addEventListener('click', (e) => {
   }
 });
 
-// ---------- shared login ----------
+// ---------- platform support access ----------
 
-function renderShared() {
-  const on = state.sharedLoginEnabled;
-  $('sharedState').textContent = on ? 'On — the shared “production” login still works' : 'Off — everyone signs in with their own login';
-  $('sharedBtn').textContent = on ? 'Switch the shared login off' : 'Switch the shared login back on';
-  $('sharedBtn').className = on ? 'btn-danger-ghost btn-small' : 'btn-ghost btn-small';
-  $('sharedNote').textContent = on
-    ? 'The shared login has full access. Switch it off once everyone has their own login. Devices signed in with it will be signed out. You need to be signed in with your own admin login to do this.'
-    : 'Only individual users can sign in.';
+function renderSupport() {
+  const on = !!state.site?.supportAccess;
+  $('supportState').textContent = on ? 'Allowed' : 'Switched off';
+  $('supportBtn').textContent = on ? 'Switch support access off' : 'Allow support access';
+  $('supportBtn').className = on ? 'btn-danger-ghost btn-small' : 'btn-ghost btn-small';
+  $('supportBtn').hidden = !!state.me?.support; // the customer decides, not support
+  const rows = state.supportSessions || [];
+  $('supportList').innerHTML = rows.length
+    ? rows.map((s) => '<div><time>' + escapeHtml(fmtTimestamp(s.startedAt)) + '</time><span><b>' + escapeHtml(s.adminName) + '</b> — ' +
+        escapeHtml(s.reason) + ' · ' + (s.mode === 'edit' ? 'could make changes' : 'view only') +
+        (s.ended ? '' : ' · <b>open now</b>') + '</span></div>').join('')
+    : '<div>No support visits yet.</div>';
 }
 
-$('sharedBtn').addEventListener('click', (e) => {
-  const turnOff = state.sharedLoginEnabled;
+$('supportBtn').addEventListener('click', (e) => {
+  const turnOff = !!state.site?.supportAccess;
   const go = () => busy(e.target, 'Saving…', async () => {
-    await api('PUT', '/settings/shared-login', { enabled: !turnOff });
+    await api('PUT', '/settings/support-access', { allowed: !turnOff });
     await load();
   });
   if (turnOff) confirmClick(e.target, go); else go();
@@ -232,5 +250,5 @@ async function loadActivity() {
 }
 $('actUser').addEventListener('change', () => loadActivity().catch((err) => showError(err.message)));
 
-me.then((u) => { state.me = u; });
-load().then(loadActivity).catch((err) => showError(err.message));
+me.then((u) => { state.me = u; })
+  .then(load).then(loadActivity).catch((err) => showError(err.message));

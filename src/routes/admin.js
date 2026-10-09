@@ -28,7 +28,8 @@ const safeEqual = (a, b) => {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 };
 
-export function adminRouter({ db, masterKey, createClient, supportCookie, secure = false, now = () => Date.now() }) {
+// importWaitsForProducts: tests wait for the background product count.
+export function adminRouter({ db, masterKey, createClient, supportCookie, secure = false, importWaitsForProducts = false, now = () => Date.now() }) {
   const key = createHmac('sha256', 'platform-admin-session').update(masterKey).digest();
   const sign = (s) => createHmac('sha256', key).update(s).digest('base64url');
   const cookieOpts = { httpOnly: true, secure, sameSite: 'strict', maxAge: MAX_AGE_MS, path: '/admin' };
@@ -138,7 +139,7 @@ export function adminRouter({ db, masterKey, createClient, supportCookie, secure
   r.post('/api/sites/:id/import', async (req, res) => {
     const id = Number(req.params.id);
     try {
-      const s = await platform.testAndImport(db, id, opts);
+      const s = await platform.testAndImport(db, id, { ...opts, waitForProducts: importWaitsForProducts });
       await log(req, 'Imported from Unleashed: ' + s.name, { customerId: s.customerId, siteId: s.id },
         { company: s.companyName, tracking: s.trackingDetected, warehouses: s.warehouses.length });
       res.json(s);

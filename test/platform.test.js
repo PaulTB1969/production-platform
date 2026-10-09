@@ -57,7 +57,7 @@ async function signIn(email, password) {
 before(async () => {
   db = await openDb({});
   await migrate(db);
-  server = createApp({ db, config: {}, createClient: fakeClient }).listen(0);
+  server = createApp({ db, config: { importWaitsForProducts: true }, createClient: fakeClient }).listen(0);
   base = `http://localhost:${server.address().port}`;
 });
 after(async () => { server.close(); await db.close(); });

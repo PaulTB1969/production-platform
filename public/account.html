@@ -69,8 +69,8 @@
 
   me.then((user) => {
     if (!user) return;
-    if (user.shared) {
-      document.getElementById('pwForm').innerHTML = '<div class="export-note" style="margin-top:0;">You are signed in with the shared login. Its password is set on the server. Ask an admin for your own login.</div>';
+    if (user.support) {
+      document.getElementById('pwForm').innerHTML = '<div class="export-note" style="margin-top:0;">This is a platform support session — there is no password to change here.</div>';
       return;
     }
     const must = first || user.mustChangePassword;

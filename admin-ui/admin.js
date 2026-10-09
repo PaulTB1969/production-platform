@@ -2,7 +2,7 @@
 // Test & import, tracking mode, and the admin activity log.
 
 const $ = (id) => document.getElementById(id);
-const state = { customers: [], open: null, editing: null, addingSite: null, keysFor: null };
+const state = { customers: [], open: null, editing: null, addingSite: null, keysFor: null, supportFor: null };
 
 const TRACK_LABEL = { batch: 'Batch numbers', serial: 'Serial numbers', both: 'Batch + serial', none: 'No tracking' };
 
@@ -73,11 +73,14 @@ function siteCard(s) {
     '<dt>Unleashed company</dt><dd>' + (esc(s.companyName) || '<i>not imported yet</i>') + '</dd>' +
     '<dt>API ID</dt><dd>' + esc(s.apiId) + ' · key stored ' + (s.hasApiKey ? '✓' : '✗') + '</dd>' +
     (s.baseCurrency ? '<dt>Currency / tax</dt><dd>' + esc(s.baseCurrency) + (s.defaultTaxRate !== null ? ' · ' + esc(s.defaultTaxRate * 100) + '% tax' : '') + '</dd>' : '') +
-    (counts ? '<dt>Products</dt><dd>' + counts.total + ' active · ' + counts.batchTracked + ' batch-tracked · ' + counts.serialized + ' serialised</dd>' : '') +
+    (s.productScanRunning ? '<dt>Products</dt><dd><i>Counting products in Unleashed… this takes a minute or two.</i></dd>'
+      : counts ? '<dt>Products</dt><dd>' + counts.total + ' active · ' + counts.batchTracked + ' batch-tracked · ' + counts.serialized + ' serialised</dd>' : '') +
+    (s.productScanError ? '<dt>Products</dt><dd class="warn-note">Counting failed: ' + esc(s.productScanError) + '</dd>' : '') +
     (s.productGroupCount !== null && s.productGroupCount !== undefined ? '<dt>Product groups</dt><dd>' + s.productGroupCount + '</dd>' : '') +
     '<dt>Warehouses</dt><dd>' + (s.warehouses.length ? s.warehouses.filter((w) => !w.obsolete).length + ' active' : '–') + '</dd>' +
     '<dt>Time zone</dt><dd>' + esc(s.timeZone) + '</dd>' +
     '<dt>Last import</dt><dd>' + (when(s.importedAt) || '–') + '</dd>' +
+    '<dt>Support access</dt><dd>' + (s.supportAccess ? 'Allowed by the customer' : '<b>Switched off by the customer</b>') + '</dd>' +
     '</dl>';
   if (s.warehouses.length) {
     out += '<details><summary class="export-note" style="cursor:pointer;">Warehouse list</summary><div class="wh-list">' +
@@ -93,7 +96,15 @@ function siteCard(s) {
       '<div class="field"><label>New API key (blank = keep)</label><input name="apiKey" type="password" autocomplete="new-password"></div>' +
       '<div class="form-actions wide"><button type="submit" class="btn-primary btn-small">Save keys</button><button type="button" class="btn-ghost btn-small" data-keys-cancel>Cancel</button></div></form>';
   }
+  if (state.supportFor === s.id) {
+    out += '<form class="form-grid" data-support-form="' + s.id + '">' +
+      '<div class="field wide"><label>Reason (the customer sees this)</label><input name="reason" placeholder="e.g. checking a failed sync" required></div>' +
+      '<div class="field"><label>Mode</label><select name="mode"><option value="view">View only</option><option value="edit">Can make changes</option></select></div>' +
+      '<div class="form-actions wide"><button type="submit" class="btn-primary btn-small">Open the site (2 hours)</button>' +
+      '<button type="button" class="btn-ghost btn-small" data-support-cancel>Cancel</button></div></form>';
+  }
   out += '<div class="form-actions">' +
+    (s.supportAccess && s.status === 'active' ? '<button type="button" class="btn-ghost btn-small" data-support="' + s.id + '">Open for support</button>' : '') +
     '<button type="button" class="btn-primary btn-small" data-import="' + s.id + '">Test &amp; import from Unleashed</button>' +
     '<button type="button" class="btn-ghost btn-small" data-keys="' + s.id + '">Change API keys</button>' +
     '<button type="button" class="btn-ghost btn-small" data-site-status="' + s.id + '">' + (s.status === 'inactive' ? 'Make active' : 'Make inactive') + '</button>' +
@@ -143,10 +154,16 @@ function render() {
   }
 }
 
+let pollTimer = null;
 async function load() {
   state.customers = await api('GET', '/customers');
   render();
   loadActivity();
+  // While a product count runs in the background, check back every 10 seconds.
+  clearTimeout(pollTimer);
+  if (state.customers.some((c) => c.sites.some((s) => s.productScanRunning))) {
+    pollTimer = setTimeout(() => load().catch(() => {}), 10000);
+  }
 }
 
 async function loadActivity() {
@@ -187,6 +204,17 @@ document.addEventListener('submit', async (e) => {
       try { await api('POST', '/sites/' + s.id + '/import'); } catch (err) { showError('Saved, but the import failed: ' + err.message); }
       await load();
     });
+  } else if (form.dataset.supportForm) {
+    // Opened in a new tab; the support session cookie is set by this call.
+    const tab = window.open('about:blank', '_blank');
+    await busy(btn, 'Opening…', async () => {
+      try {
+        const r = await api('POST', '/sites/' + form.dataset.supportForm + '/support', formData(form));
+        state.supportFor = null;
+        if (tab) tab.location = r.url; else location.href = r.url;
+        await load();
+      } catch (err) { if (tab) tab.close(); throw err; }
+    });
   } else if (form.dataset.keysForm) {
     await busy(btn, 'Saving…', async () => {
       await api('PATCH', '/sites/' + form.dataset.keysForm, formData(form));
@@ -202,7 +230,7 @@ document.addEventListener('click', async (e) => {
   if (head && !t.closest('button, select, input')) {
     const id = Number(head.dataset.open);
     state.open = state.open === id ? null : id;
-    state.editing = null; state.addingSite = null; state.keysFor = null;
+    state.editing = null; state.addingSite = null; state.keysFor = null; state.supportFor = null;
     render();
     return;
   }
@@ -214,6 +242,10 @@ document.addEventListener('click', async (e) => {
     state.addingSite = Number(t.dataset.addSite); render();
   } else if (t.matches('[data-site-cancel]')) {
     state.addingSite = null; render();
+  } else if (t.matches('[data-support]')) {
+    state.supportFor = Number(t.dataset.support); render();
+  } else if (t.matches('[data-support-cancel]')) {
+    state.supportFor = null; render();
   } else if (t.matches('[data-keys]')) {
     state.keysFor = Number(t.dataset.keys); render();
   } else if (t.matches('[data-keys-cancel]')) {

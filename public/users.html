@@ -67,7 +67,7 @@
   <div class="page-head">
     <div class="eyebrow">Mountain Falls · Production</div>
     <h1>Users &amp; Roles</h1>
-    <div class="sub">Who can sign in, what each role can do, and which production lines each person works on.</div>
+    <div class="sub">Who can sign in to <b id="siteName">this site</b>, what each role can do, and which production lines each person works on. Roles and access are per site; a person's login works on every site they're given.</div>
   </div>
 
   <div class="error-banner" id="errorBanner" hidden></div>
@@ -96,8 +96,11 @@
           <input id="uCell" type="tel" autocomplete="off" placeholder="082 123 4567">
         </div>
         <div class="export-note wide" style="margin-top:-4px;">They sign in with either one. Fill in at least one. The cell number is kept for WhatsApp messages later.</div>
+        <div class="field wide" id="uAccessField">
+          <div class="checks"><label><input type="checkbox" id="uAccess" checked> Access to this site</label></div>
+        </div>
         <div class="field">
-          <label for="uRole">Role</label>
+          <label for="uRole">Role on this site</label>
           <select id="uRole"></select>
         </div>
         <div class="field">
@@ -106,7 +109,7 @@
         </div>
         <div class="export-note wide" style="margin-top:-4px;">Lines limit the Production Schedule and Raw Material Requisitions to those lines. Tick none for all lines.</div>
         <div class="field wide" id="uActiveField">
-          <div class="checks"><label><input type="checkbox" id="uActive"> Can sign in (untick to switch this login off)</label></div>
+          <div class="checks"><label><input type="checkbox" id="uActive"> Can sign in (untick to switch this login off on every site)</label></div>
         </div>
       </div>
       <div class="form-actions" style="margin-top:14px;">
@@ -126,13 +129,14 @@
     </div>
   </div>
 
-  <div class="card card-pad" id="sharedSection">
-    <div class="section-title">Shared login</div>
+  <div class="card card-pad" id="supportSection">
+    <div class="section-title">Platform support access</div>
     <div class="shared-row">
-      <span class="state" id="sharedState">…</span>
-      <button type="button" class="btn-ghost btn-small" id="sharedBtn"></button>
+      <span class="state" id="supportState">…</span>
+      <button type="button" class="btn-ghost btn-small" id="supportBtn"></button>
     </div>
-    <div class="export-note" id="sharedNote"></div>
+    <div class="export-note">When this is on, platform support can open this site to help — each visit has a reason, is view-only unless changes are needed, ends after 2 hours, and is listed here. Support never sees passwords or API keys.</div>
+    <div class="log" id="supportList" style="margin-top:10px;"></div>
   </div>
 
   <div class="card card-pad" id="activitySection">

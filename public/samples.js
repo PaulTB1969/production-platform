@@ -94,7 +94,7 @@ function padBlock(which) {
 }
 
 function defaultName() {
-  return state.user && !state.user.shared ? state.user.name : '';
+  return state.user && !state.user.support ? state.user.name : '';
 }
 
 function takenBox(f) {

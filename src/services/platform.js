@@ -131,6 +131,7 @@ export const siteRow = (r) => ({
   trackingDetected: r.tracking_detected, trackingOverride: r.tracking_override,
   tracking: r.tracking_override || r.tracking_detected || null,
   importedAt: r.imported_at, importError: r.import_error, timeZone: r.time_zone,
+  productScanRunning: !!r.product_scan_started_at, productScanError: r.product_scan_error,
   supportAccess: r.support_access, status: r.status, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 
@@ -213,26 +214,26 @@ export function detectTracking({ batchTracked, serialized }) {
   return 'none';
 }
 
-// Reads everything from Unleashed first and only then saves, so a failed
-// import leaves the site as it was (with the error noted).
-export async function testAndImport(db, id, { masterKey, createClient }) {
+const importFailure = (err) => (err.status === 401 || err.status === 403
+  ? 'Unleashed refused the API ID / key — check them in Unleashed → Integration → Unleashed API Access.'
+  : err.message);
+
+// Quick part (a few seconds): the keys, company, warehouses and product
+// groups — read first and only then saved, so a failed import leaves the
+// site as it was (with the error noted). The product count, which takes a
+// minute or two in Unleashed, then runs in the background (scanProducts);
+// pass { waitForProducts: true } to wait for it.
+export async function testAndImport(db, id, { masterKey, createClient, waitForProducts = false, log = console.error }) {
   const site = await getSite(db, id);
   if (!site) throw new UserError('Site not found.', 404);
-  let summary;
+  let summary, client;
   try {
-    const client = createClient(await siteCredentials(db, id, { masterKey }));
+    client = createClient(await siteCredentials(db, id, { masterKey }));
     const company = (await client.get('Companies')).Items?.[0];
     if (!company?.Guid) throw new Error('Unleashed did not return the company details.');
     // Not paged in Unleashed (checked against a live account).
     const warehouses = (await client.get('Warehouses')).Items || [];
     const groups = (await client.get('ProductGroups')).Items || [];
-    const products = await client.getAll('Products', {}, 200);
-    const live = products.filter((p) => !p.Obsolete);
-    const counts = {
-      total: live.length,
-      batchTracked: live.filter((p) => p.IsBatchTracked).length,
-      serialized: live.filter((p) => p.IsSerialized).length,
-    };
     summary = {
       companyGuid: company.Guid,
       companyName: company.CompanyName || null,
@@ -242,13 +243,9 @@ export async function testAndImport(db, id, { masterKey, createClient }) {
         code: w.WarehouseCode, name: w.WarehouseName || '', city: w.City || '', isDefault: !!w.IsDefault, obsolete: !!w.Obsolete,
       })),
       productGroupCount: groups.length,
-      productCounts: counts,
-      trackingDetected: detectTracking(counts),
     };
   } catch (err) {
-    const message = err.status === 401 || err.status === 403
-      ? 'Unleashed refused the API ID / key — check them in Unleashed → Integration → Unleashed API Access.'
-      : err.message;
+    const message = importFailure(err);
     await db.query('UPDATE sites SET import_error = $2, updated_at = now() WHERE id = $1', [id, message]);
     throw new UserError(message, 502);
   }
@@ -262,11 +259,35 @@ export async function testAndImport(db, id, { masterKey, createClient }) {
 
   await db.query(
     `UPDATE sites SET unleashed_company_guid = $2, company_name = $3, base_currency = $4, default_tax_rate = $5,
-       warehouses = $6, product_group_count = $7, product_counts = $8, tracking_detected = $9,
-       imported_at = now(), import_error = NULL, updated_at = now() WHERE id = $1`,
+       warehouses = $6, product_group_count = $7, imported_at = now(), import_error = NULL,
+       product_scan_started_at = now(), product_scan_error = NULL, updated_at = now() WHERE id = $1`,
     [id, summary.companyGuid, summary.companyName, summary.baseCurrency, summary.defaultTaxRate,
-      JSON.stringify(summary.warehouses), summary.productGroupCount, JSON.stringify(summary.productCounts), summary.trackingDetected]);
+      JSON.stringify(summary.warehouses), summary.productGroupCount]);
+  const scan = scanProducts(db, id, client).catch((err) => log(`product scan for site ${id}: ${err.message}`));
+  if (waitForProducts) await scan;
   return getSite(db, id);
+}
+
+// Counts active products, batch-tracked and serialised, and sets the
+// detected tracking mode.
+export async function scanProducts(db, id, client) {
+  try {
+    const products = await client.getAll('Products', {}, 1000);
+    const live = products.filter((p) => !p.Obsolete);
+    const counts = {
+      total: live.length,
+      batchTracked: live.filter((p) => p.IsBatchTracked).length,
+      serialized: live.filter((p) => p.IsSerialized).length,
+    };
+    await db.query(
+      `UPDATE sites SET product_counts = $2, tracking_detected = $3, product_scan_started_at = NULL,
+         product_scan_error = NULL, updated_at = now() WHERE id = $1`,
+      [id, JSON.stringify(counts), detectTracking(counts)]);
+  } catch (err) {
+    await db.query('UPDATE sites SET product_scan_started_at = NULL, product_scan_error = $2, updated_at = now() WHERE id = $1',
+      [id, importFailure(err)]);
+    throw err;
+  }
 }
 
 // ---------- support sessions ----------
