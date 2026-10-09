@@ -1,5 +1,13 @@
 // Users, roles and the activity log.
 //
+// A user is platform-wide (table "users" in the public schema) and belongs to
+// a customer. They get access to one or more of that customer's sites, each
+// with a role and production lines (table "site_access"). Roles and the
+// activity log live in each site's own schema.
+//
+//   pdb = the platform database (public schema)
+//   sdb = the current site's scoped database
+//
 // Passwords are stored as scrypt hashes. A new user (or a password reset)
 // gets a one-time password, shown once to the admin; the user must choose
 // their own at first sign-in.
@@ -15,10 +23,15 @@ export const AREAS = ['schedule', 'requisitions', 'collections', 'samples'];
 export const LEVELS = ['none', 'view', 'edit'];
 export const ACTIONS = ['unleashed', 'approve', 'samplesSignOff', 'manageUsers'];
 
-// What the shared 'production' login (and local dev without a password) can do.
+// What platform support in edit mode (and local dev) can do.
 export const FULL_ACCESS = {
   areas: { schedule: 'edit', requisitions: 'edit', collections: 'edit', samples: 'edit' },
   actions: { unleashed: true, approve: true, samplesSignOff: true, manageUsers: true },
+};
+// Support in view mode: sees everything, changes nothing.
+export const VIEW_ACCESS = {
+  areas: { schedule: 'view', requisitions: 'view', collections: 'view', samples: 'view' },
+  actions: { unleashed: false, approve: false, samplesSignOff: false, manageUsers: true },
 };
 
 // ---------- passwords ----------
@@ -74,7 +87,7 @@ export function loginKey(v) {
   try { return { cell: normalizeCell(s) }; } catch { return null; }
 }
 
-// ---------- roles ----------
+// ---------- roles (per site) ----------
 
 const roleRow = (r) => ({ id: r.id, name: r.name, areas: r.areas, actions: r.actions });
 
@@ -91,16 +104,22 @@ function cleanRole(body) {
   return { name, areas, actions };
 }
 
-export async function listRoles(db) {
-  const rows = (await db.query(
-    `SELECT r.*, (SELECT count(*) FROM users u WHERE u.role_id = r.id)::int AS users FROM roles r ORDER BY r.id`)).rows;
+export async function getRole(sdb, id) {
+  const r = (await sdb.query('SELECT * FROM roles WHERE id = $1', [id])).rows[0];
+  return r ? roleRow(r) : null;
+}
+
+export async function listRoles(sdb, siteId) {
+  const rows = (await sdb.query(
+    `SELECT r.*, (SELECT count(*) FROM public.site_access a WHERE a.site_id = $1 AND a.role_id = r.id)::int AS users
+       FROM roles r ORDER BY r.id`, [siteId])).rows;
   return rows.map((r) => ({ ...roleRow(r), users: r.users }));
 }
 
-export async function createRole(db, body) {
+export async function createRole(sdb, body) {
   const r = cleanRole(body);
   try {
-    const row = (await db.query('INSERT INTO roles (name, areas, actions) VALUES ($1, $2, $3) RETURNING *',
+    const row = (await sdb.query('INSERT INTO roles (name, areas, actions) VALUES ($1, $2, $3) RETURNING *',
       [r.name, JSON.stringify(r.areas), JSON.stringify(r.actions)])).rows[0];
     return roleRow(row);
   } catch (err) {
@@ -109,54 +128,71 @@ export async function createRole(db, body) {
   }
 }
 
-export async function updateRole(db, id, body) {
+export async function updateRole(pdb, sdb, siteId, id, body) {
   const r = cleanRole(body);
-  return db.tx(async (q) => {
-    let row;
-    try {
-      row = (await q.query('UPDATE roles SET name = $2, areas = $3, actions = $4 WHERE id = $1 RETURNING *',
-        [id, r.name, JSON.stringify(r.areas), JSON.stringify(r.actions)])).rows[0];
-    } catch (err) {
-      if (err.code === '23505') throw new UserError(`There is already a role called "${r.name}".`, 409);
-      throw err;
-    }
-    if (!row) throw new UserError('Role not found.', 404);
-    await ensureAnAdmin(q);
+  const before = await getRole(sdb, id);
+  if (!before) throw new UserError('Role not found.', 404);
+  if (before.actions.manageUsers && !r.actions.manageUsers) {
+    const admins = await siteAdmins(pdb, sdb, siteId);
+    const others = admins.filter((a) => a.roleId !== id);
+    if (admins.length && !others.length) throw lockoutError();
+  }
+  try {
+    const row = (await sdb.query('UPDATE roles SET name = $2, areas = $3, actions = $4 WHERE id = $1 RETURNING *',
+      [id, r.name, JSON.stringify(r.areas), JSON.stringify(r.actions)])).rows[0];
     return roleRow(row);
-  });
+  } catch (err) {
+    if (err.code === '23505') throw new UserError(`There is already a role called "${r.name}".`, 409);
+    throw err;
+  }
 }
 
-export async function deleteRole(db, id) {
-  const { n } = (await db.query('SELECT count(*)::int AS n FROM users WHERE role_id = $1', [id])).rows[0];
+export async function deleteRole(pdb, sdb, siteId, id) {
+  const { n } = (await pdb.query('SELECT count(*)::int AS n FROM site_access WHERE site_id = $1 AND role_id = $2', [siteId, id])).rows[0];
   if (n) throw new UserError(`${n} user(s) have this role — give them another role first.`, 409);
-  await db.query('DELETE FROM roles WHERE id = $1', [id]);
+  await sdb.query('DELETE FROM roles WHERE id = $1', [id]);
 }
 
 // ---------- users ----------
 
-const USER_COLS = `u.id, u.name, u.email, u.cell, u.role_id, u.lines, u.active, u.must_change_password,
-  u.session_version, u.last_login_at, u.created_at, r.name AS role_name, r.areas, r.actions`;
-
-export const userRow = (u) => ({
-  id: u.id, name: u.name, email: u.email, cell: u.cell, roleId: u.role_id, roleName: u.role_name,
-  lines: u.lines || [], active: u.active, mustChangePassword: u.must_change_password,
-  lastLoginAt: u.last_login_at, createdAt: u.created_at,
-});
-
-export async function listUsers(db) {
-  return (await db.query(`SELECT ${USER_COLS} FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.active DESC, lower(u.name)`))
-    .rows.map(userRow);
-}
+const USER_COLS = `u.id, u.customer_id, u.name, u.email, u.cell, u.active, u.must_change_password,
+  u.session_version, u.last_login_at, u.created_at`;
 
 // Full record for signing in / checking a session (includes the hash).
-export async function findUserForLogin(db, key) {
+export async function findUserForLogin(pdb, key) {
   if (!key) return null;
   const [col, val] = key.email ? ['lower(u.email)', key.email] : ['u.cell', key.cell];
-  return (await db.query(`SELECT ${USER_COLS}, u.password_hash FROM users u JOIN roles r ON r.id = u.role_id WHERE ${col} = $1`, [val])).rows[0] || null;
+  return (await pdb.query(`SELECT ${USER_COLS}, u.password_hash FROM users u WHERE ${col} = $1`, [val])).rows[0] || null;
 }
 
-export async function getUserById(db, id) {
-  return (await db.query(`SELECT ${USER_COLS}, u.password_hash FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`, [id])).rows[0] || null;
+export async function getUserById(pdb, id) {
+  return (await pdb.query(`SELECT ${USER_COLS}, u.password_hash FROM users u WHERE u.id = $1`, [id])).rows[0] || null;
+}
+
+// The active sites a user can open, with their role id and lines on each.
+export async function userSites(pdb, userId) {
+  return (await pdb.query(
+    `SELECT s.id, s.name, s.customer_id, a.role_id, a.lines
+       FROM site_access a JOIN sites s ON s.id = a.site_id
+      WHERE a.user_id = $1 AND s.status = 'active' ORDER BY lower(s.name)`, [userId])).rows
+    .map((r) => ({ id: r.id, name: r.name, customerId: r.customer_id, roleId: r.role_id, lines: r.lines || [] }));
+}
+
+// Everyone at the customer, with their access to this site (or none).
+export async function listUsers(pdb, sdb, { customerId, siteId }) {
+  const roles = new Map((await sdb.query('SELECT id, name FROM roles')).rows.map((r) => [r.id, r.name]));
+  const rows = (await pdb.query(
+    `SELECT ${USER_COLS}, a.role_id, a.lines,
+            (SELECT array_agg(s.name ORDER BY s.name) FROM site_access x JOIN sites s ON s.id = x.site_id
+              WHERE x.user_id = u.id AND x.site_id <> $2) AS other_sites
+       FROM users u LEFT JOIN site_access a ON a.user_id = u.id AND a.site_id = $2
+      WHERE u.customer_id = $1 ORDER BY u.active DESC, (a.role_id IS NULL), lower(u.name)`, [customerId, siteId])).rows;
+  return rows.map((u) => ({
+    id: u.id, name: u.name, email: u.email, cell: u.cell, active: u.active, mustChangePassword: u.must_change_password,
+    lastLoginAt: u.last_login_at, createdAt: u.created_at,
+    hasAccess: u.role_id !== null, roleId: u.role_id, roleName: u.role_id !== null ? roles.get(u.role_id) || '?' : null,
+    lines: u.lines || [], otherSites: u.other_sites || [],
+  }));
 }
 
 function cleanUser(body) {
@@ -165,11 +201,16 @@ function cleanUser(body) {
   const email = normalizeEmail(body?.email);
   const cell = normalizeCell(body?.cell);
   if (!email && !cell) throw new UserError('Enter an email address or a cell number (or both) — that is what they sign in with.');
+  return { name, email, cell, active: body?.active !== false };
+}
+
+async function cleanAccess(sdb, body) {
+  if (body?.hasAccess === false) return null;
   const roleId = Number(body?.roleId);
-  if (!Number.isInteger(roleId)) throw new UserError('Pick a role.');
+  if (!Number.isInteger(roleId) || !(await getRole(sdb, roleId))) throw new UserError('Pick a role.');
   const lines = Array.isArray(body?.lines) ? [...new Set(body.lines)] : [];
   for (const l of lines) if (!LINES.includes(l)) throw new UserError(`Unknown production line "${l}".`);
-  return { name, email, cell, roleId, lines, active: body?.active !== false };
+  return { roleId, lines };
 }
 
 const duplicate = (err, u) => {
@@ -179,114 +220,116 @@ const duplicate = (err, u) => {
     : `Someone else already signs in with ${u.cell}.`, 409);
 };
 
-// Returns the user and their one-time password (shown once).
-export async function createUser(db, body) {
+// A new user at the customer, with access to this site. Returns the user's
+// id and their one-time password (shown once).
+export async function createUser(pdb, sdb, { customerId, siteId }, body) {
   const u = cleanUser(body);
+  const access = await cleanAccess(sdb, { ...body, hasAccess: true });
   const password = oneTimePassword();
   const hash = await hashPassword(password);
-  try {
-    const { id } = (await db.query(
-      `INSERT INTO users (name, email, cell, role_id, lines, active, password_hash, must_change_password)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true) RETURNING id`,
-      [u.name, u.email, u.cell, u.roleId, u.lines, u.active, hash])).rows[0];
-    return { user: userRow(await getUserById(db, id)), password };
-  } catch (err) {
-    if (err.code === '23503') throw new UserError('That role no longer exists.', 409);
-    throw duplicate(err, u);
-  }
+  const id = await pdb.tx(async (q) => {
+    let row;
+    try {
+      row = (await q.query(
+        `INSERT INTO users (customer_id, name, email, cell, active, password_hash, must_change_password)
+         VALUES ($1, $2, $3, $4, $5, $6, true) RETURNING id`,
+        [customerId, u.name, u.email, u.cell, u.active, hash])).rows[0];
+    } catch (err) {
+      throw duplicate(err, u);
+    }
+    await q.query('INSERT INTO site_access (user_id, site_id, role_id, lines) VALUES ($1, $2, $3, $4)',
+      [row.id, siteId, access.roleId, access.lines]);
+    return row.id;
+  });
+  return { id, password };
 }
 
-export async function updateUser(db, id, body) {
+// Details (all sites) plus access to this site: role and lines, or
+// hasAccess: false to remove it.
+export async function updateUser(pdb, sdb, { customerId, siteId }, id, body) {
+  const before = (await pdb.query('SELECT * FROM users WHERE id = $1 AND customer_id = $2', [id, customerId])).rows[0];
+  if (!before) throw new UserError('User not found.', 404);
   const u = cleanUser(body);
-  return db.tx(async (q) => {
-    const before = (await q.query('SELECT active FROM users WHERE id = $1', [id])).rows[0];
-    if (!before) throw new UserError('User not found.', 404);
+  const access = await cleanAccess(sdb, body);
+
+  // Never leave the site without someone who can manage users.
+  const admins = await siteAdmins(pdb, sdb, siteId);
+  if (admins.some((a) => a.id === id)) {
+    const newRole = access ? await getRole(sdb, access.roleId) : null;
+    const staysAdmin = u.active && access && newRole?.actions.manageUsers;
+    if (!staysAdmin && admins.length === 1) throw lockoutError();
+  }
+
+  await pdb.tx(async (q) => {
     try {
       // Switching someone off signs them out everywhere.
       await q.query(
-        `UPDATE users SET name = $2, email = $3, cell = $4, role_id = $5, lines = $6, active = $7,
-           session_version = session_version + CASE WHEN active AND NOT $7 THEN 1 ELSE 0 END
+        `UPDATE users SET name = $2, email = $3, cell = $4, active = $5,
+           session_version = session_version + CASE WHEN active AND NOT $5 THEN 1 ELSE 0 END
          WHERE id = $1`,
-        [id, u.name, u.email, u.cell, u.roleId, u.lines, u.active]);
+        [id, u.name, u.email, u.cell, u.active]);
     } catch (err) {
-      if (err.code === '23503') throw new UserError('That role no longer exists.', 409);
       throw duplicate(err, u);
     }
-    await ensureAnAdmin(q);
-    return userRow(await getUserById(q, id));
+    if (access) {
+      await q.query(`INSERT INTO site_access (user_id, site_id, role_id, lines) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, site_id) DO UPDATE SET role_id = EXCLUDED.role_id, lines = EXCLUDED.lines`,
+        [id, siteId, access.roleId, access.lines]);
+    } else {
+      await q.query('DELETE FROM site_access WHERE user_id = $1 AND site_id = $2', [id, siteId]);
+    }
   });
 }
 
-export async function resetPassword(db, id) {
+export async function resetPassword(pdb, customerId, id) {
   const password = oneTimePassword();
-  const r = await db.query(
-    `UPDATE users SET password_hash = $2, must_change_password = true, session_version = session_version + 1 WHERE id = $1`,
-    [id, await hashPassword(password)]);
+  const r = await pdb.query(
+    `UPDATE users SET password_hash = $3, must_change_password = true, session_version = session_version + 1
+      WHERE id = $1 AND customer_id = $2`,
+    [id, customerId, await hashPassword(password)]);
   if (!r.affectedRows && !r.rowCount) throw new UserError('User not found.', 404);
   return { password };
 }
 
-// The user's own change. Returns the new session version.
-export async function changePassword(db, id, { current, next }, { skipCurrent = false } = {}) {
-  const u = await getUserById(db, id);
+// The user's own change. Returns the updated user.
+export async function changePassword(pdb, id, { current, next }, { skipCurrent = false } = {}) {
+  const u = await getUserById(pdb, id);
   if (!u) throw new UserError('User not found.', 404);
   if (!skipCurrent && !(await verifyPassword(current || '', u.password_hash))) throw new UserError('Your current password is not right.');
   checkNewPassword(next);
   if (await verifyPassword(next, u.password_hash)) throw new UserError('Choose a new password, different from the one-time password.');
-  const row = (await db.query(
+  await pdb.query(
     `UPDATE users SET password_hash = $2, must_change_password = false, session_version = session_version + 1
-      WHERE id = $1 RETURNING session_version`, [id, await hashPassword(next)])).rows[0];
-  return row.session_version;
+      WHERE id = $1`, [id, await hashPassword(next)]);
+  return getUserById(pdb, id);
 }
 
-export async function recordLogin(db, id) {
-  await db.query('UPDATE users SET last_login_at = now() WHERE id = $1', [id]);
+export async function recordLogin(pdb, id) {
+  await pdb.query('UPDATE users SET last_login_at = now() WHERE id = $1', [id]);
 }
 
-// ---------- settings ----------
-
-export async function getSetting(db, name, fallback) {
-  const r = (await db.query('SELECT value FROM settings WHERE name = $1', [name])).rows[0];
-  return r ? r.value : fallback;
+// Active users of this site who can manage users and have chosen a password.
+async function siteAdmins(pdb, sdb, siteId) {
+  const manageRoles = new Set((await sdb.query(`SELECT id FROM roles WHERE (actions->>'manageUsers')::boolean`)).rows.map((r) => r.id));
+  const rows = (await pdb.query(
+    `SELECT u.id, a.role_id FROM site_access a JOIN users u ON u.id = a.user_id
+      WHERE a.site_id = $1 AND u.active AND NOT u.must_change_password`, [siteId])).rows;
+  return rows.filter((r) => manageRoles.has(r.role_id)).map((r) => ({ id: r.id, roleId: r.role_id }));
 }
 
-export async function sharedLoginEnabled(db) {
-  return (await getSetting(db, 'sharedLoginEnabled', true)) !== false;
+const lockoutError = () => new UserError('That would leave this site with nobody who can manage users. Keep at least one active user (who has signed in and set their password) with a role that can manage users.', 409);
+
+// ---------- activity log (per site) ----------
+
+export async function logActivity(sdb, user, action, detail = {}) {
+  await sdb.query('INSERT INTO activity_log (user_id, user_name, action, detail, support) VALUES ($1, $2, $3, $4, $5)',
+    [user?.id ?? null, user?.name || 'Unknown', action, JSON.stringify(detail), !!user?.support]);
 }
 
-export async function setSharedLogin(db, enabled) {
-  return db.tx(async (q) => {
-    await q.query(`INSERT INTO settings (name, value) VALUES ('sharedLoginEnabled', $1)
-      ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`, [JSON.stringify(!!enabled)]);
-    await ensureAnAdmin(q);
-    return { sharedLoginEnabled: !!enabled };
-  });
-}
-
-// Never lock everyone out: with the shared login off, at least one active
-// user must still be able to manage users (who has already chosen a password).
-async function ensureAnAdmin(q) {
-  const shared = (await q.query(`SELECT value FROM settings WHERE name = 'sharedLoginEnabled'`)).rows[0];
-  if (!shared || shared.value !== false) return;
-  const { n } = (await q.query(
-    `SELECT count(*)::int AS n FROM users u JOIN roles r ON r.id = u.role_id
-      WHERE u.active AND NOT u.must_change_password AND (r.actions->>'manageUsers')::boolean`)).rows[0];
-  if (!n) {
-    throw new UserError('That would leave nobody who can manage users. Keep at least one active user (who has signed in and set their password) with a role that can manage users — or switch the shared login back on.', 409);
-  }
-}
-
-// ---------- activity log ----------
-
-export async function logActivity(db, user, action, detail = {}) {
-  await db.query('INSERT INTO activity_log (user_id, user_name, action, detail) VALUES ($1, $2, $3, $4)',
-    [user?.id ?? null, user?.name || 'Unknown', action, JSON.stringify(detail)]);
-}
-
-export async function listActivity(db, { limit = 200, userId } = {}) {
+export async function listActivity(sdb, { limit = 200, userId } = {}) {
   const params = [Math.min(Number(limit) || 200, 1000)];
   let where = '';
   if (userId) { params.push(Number(userId)); where = 'WHERE user_id = $2'; }
-  return (await db.query(`SELECT id, at, user_id, user_name, action, detail FROM activity_log ${where} ORDER BY at DESC, id DESC LIMIT $1`, params))
-    .rows.map((r) => ({ id: Number(r.id), at: r.at, userId: r.user_id, userName: r.user_name, action: r.action, detail: r.detail }));
+  return (await sdb.query(`SELECT id, at, user_id, user_name, action, detail, support FROM activity_log ${where} ORDER BY at DESC, id DESC LIMIT $1`, params))
+    .rows.map((r) => ({ id: Number(r.id), at: r.at, userId: r.user_id, userName: r.user_name, action: r.action, detail: r.detail, support: r.support }));
 }

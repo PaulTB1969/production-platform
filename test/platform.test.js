@@ -57,7 +57,7 @@ async function signIn(email, password) {
 before(async () => {
   db = await openDb({});
   await migrate(db);
-  server = createApp({ db, config: { auth: { user: 'team', password: 'secret' } }, unleashed: null, createClient: fakeClient }).listen(0);
+  server = createApp({ db, config: {}, createClient: fakeClient }).listen(0);
   base = `http://localhost:${server.address().port}`;
 });
 after(async () => { server.close(); await db.close(); });
@@ -82,9 +82,9 @@ test('tracking mode is worked out from the product flags', () => {
 test('admin console needs an admin sign-in, separate from the customer login', async () => {
   assert.equal((await call('GET', '/admin/api/customers', undefined, false)).status, 401);
   assert.equal((await call('GET', '/admin/', undefined, false)).headers.get('location'), '/admin/login');
-  // The shared customer login doesn't open it.
-  const basic = await fetch(base + '/admin/api/customers', { headers: { Authorization: 'Basic ' + Buffer.from('team:secret').toString('base64') } });
-  assert.equal(basic.status, 401);
+  // A customer user's cookie doesn't open it (different cookie, path and key).
+  const user = await fetch(base + '/admin/api/customers', { headers: { Cookie: 'ph_session=u.1.1.9999999999999.x' } });
+  assert.equal(user.status, 401);
 
   const { password } = await createAdmin(db, { name: 'Paul Beatham', email: 'Paul@Example.com' });
   assert.match((await signIn('paul@example.com', 'wrong')).location, /error=wrong/);
@@ -166,4 +166,23 @@ test('one customer, two Unleashed accounts (separate companies)', async () => {
   const log = (await call('GET', '/admin/api/activity')).data.map((l) => l.action);
   assert.ok(log.includes('Added customer Gamma Holdings'));
   assert.ok(log.some((a) => a.startsWith('Imported from Unleashed: Gamma Water')));
+});
+
+test('hourly sync: each site from its own Unleashed account into its own schema', async () => {
+  const { syncAllSites } = await import('../src/unleashed/syncAll.js');
+  const bom = (sku) => [{ Product: { ProductCode: sku, ProductDescription: sku }, BillOfMaterialsLines: [] }];
+  const clientFor = ({ apiId }) => ({
+    async getAll(resource) {
+      if (resource === 'BillOfMaterials') return bom(apiId === 'ID2' ? 'WATER_ONLY' : apiId === 'ID3' ? 'JUICE_ONLY' : 'ACME_ONLY');
+      return [];
+    },
+  });
+  const results = await syncAllSites(db, { masterKey: masterKeyFrom(null), createClient: clientFor });
+  assert.ok(results.length >= 3 && results.every((r) => r.ok), JSON.stringify(results));
+  const sites = (await db.query('SELECT id, name FROM sites WHERE imported_at IS NOT NULL')).rows;
+  for (const s of sites) {
+    const skus = (await db.scoped('site_' + s.id).query('SELECT sku FROM recipes')).rows.map((r) => r.sku);
+    const expected = { 'Gamma Water': ['WATER_ONLY'], 'Gamma Juice': ['JUICE_ONLY'], 'Acme Bottling': ['ACME_ONLY'] }[s.name];
+    assert.deepEqual(skus, expected, s.name);
+  }
 });

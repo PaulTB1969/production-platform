@@ -2,20 +2,17 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db/index.js';
-import { migrate } from '../src/db/migrate.js';
-import { createApp } from '../src/app.js';
+import { startApp } from './helpers.js';
 import { activityDetail } from '../src/permissions.js';
 
 const DATE = '2026-10-06';
 const SIG = 'data:image/png;base64,' + 'A'.repeat(400);
-let db, server, base;
-const AUTH = 'Basic ' + Buffer.from('team:secret').toString('base64');
+let app, db, base;
 
 async function api(method, path, body) {
   const res = await fetch(base + path, {
     method,
-    headers: { Authorization: AUTH, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Cookie: app.cookie, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -25,10 +22,9 @@ async function api(method, path, body) {
 }
 
 before(async () => {
-  db = await openDb({});
-  await migrate(db);
-  server = createApp({ db, config: { auth: { user: 'team', password: 'secret' } }, unleashed: null }).listen(0);
-  base = `http://localhost:${server.address().port}`;
+  app = await startApp();
+  db = app.siteDb;
+  base = app.base;
   for (const [sku, line] of [['GN750ST_MF', 'PRD - UWH'], ['P500ST_MF', 'PRD - UWH'], ['GN750ST_MF', 'PRD - UWH'],
     ['P330ST_MFSIG_PN', 'PRD - LWH'], ['B20.0_BIB_TAP_BLUE', 'PRD - AQB']]) {
     await api('POST', '/api/schedule', { sku, line, plannedCases: 10, date: DATE });
@@ -36,8 +32,7 @@ before(async () => {
 });
 
 after(async () => {
-  server.close();
-  await db.close();
+  await app.close();
 });
 
 test('forms list the day\'s products per line, LWH with an AcquaBox section', async () => {

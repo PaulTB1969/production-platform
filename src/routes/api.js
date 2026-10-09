@@ -13,6 +13,8 @@ import { sendTransfersForDate, sendAssembliesForDate, sendTruck, sendArrival } f
 import * as coll from '../services/collections.js';
 import { parseCollectionCsv, COLLECTION_TEMPLATE_CSV } from '../domain/collections.js';
 import * as users from '../services/users.js';
+import * as platform from '../services/platform.js';
+import { currentSite } from '../tenancy.js';
 import * as samples from '../services/samples.js';
 import { LINES } from '../domain/lines.js';
 import { requiredFor, denialFor, lineAllowed, activityLabel, activityDetail } from '../permissions.js';
@@ -26,7 +28,10 @@ const requireDate = (v) => {
 const sendCsv = (res, { filename, csv }) =>
   res.type('text/csv').attachment(filename).send(csv);
 
-export function apiRouter({ db, config, unleashed }) {
+// db = the current site's database (tenancy.js siteDb); platformDb = the
+// platform's own tables (users, sites); unleashed() = the current site's
+// Unleashed client, or null.
+export function apiRouter({ db, platformDb, config, unleashed }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
   r.use(express.text({ type: 'text/csv', limit: '2mb' }));
@@ -41,9 +46,11 @@ export function apiRouter({ db, config, unleashed }) {
   // Every successful change goes in the activity log, with who did it.
   r.use((req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD') return next();
+    // 'finish' fires outside the request's site context: keep the site's db.
+    const sdb = currentSite().db;
     res.on('finish', () => {
       if (res.statusCode >= 400) return;
-      users.logActivity(db, req.user, activityLabel(req.method, req.path), activityDetail(req.path, req.body))
+      users.logActivity(sdb, req.user, activityLabel(req.method, req.path), activityDetail(req.path, req.body))
         .catch((err) => console.error('activity log:', err.message));
     });
     next();
@@ -165,14 +172,14 @@ export function apiRouter({ db, config, unleashed }) {
   r.post('/collections/sheets/:truck/loaded', async (req, res) =>
     res.json(await coll.setLoaded(db, requireDate(req.body?.date), req.params.truck, req.body?.loaded !== false)));
   r.post('/collections/sheets/:truck/send', async (req, res) =>
-    res.json({ results: await sendTruck(db, unleashed, requireDate(req.body?.date), req.params.truck, sentBy(req)) }));
+    res.json({ results: await sendTruck(db, unleashed(), requireDate(req.body?.date), req.params.truck, sentBy(req)) }));
   r.post('/collections/sheets/:truck/csv', async (req, res) => {
     const e = await coll.approveTruckCsv(db, requireDate(req.body?.date), req.params.truck);
     res.status(201).json({ ...e, url: `/api/exports/${e.id}` });
   });
   r.post('/collections/sheets/:truck/undo-csv', async (req, res) => res.json(await coll.undoTruckCsv(db, requireDate(req.body?.date), req.params.truck)));
   // Second leg, per destination.
-  r.post('/collections/:id/arrival/send', async (req, res) => res.json(await sendArrival(db, unleashed, req.params.id, sentBy(req))));
+  r.post('/collections/:id/arrival/send', async (req, res) => res.json(await sendArrival(db, unleashed(), req.params.id, sentBy(req))));
   r.post('/collections/:id/arrival/csv', async (req, res) => {
     const e = await coll.arrivalCsv(db, req.params.id, todaySA());
     res.status(201).json({ ...e, url: `/api/exports/${e.id}` });
@@ -238,31 +245,46 @@ export function apiRouter({ db, config, unleashed }) {
   // ---------- Unleashed ----------
   // Send straight to Unleashed (Parked), instead of the CSV import.
   r.post('/unleashed/send/transfers', async (req, res) =>
-    res.json({ results: await sendTransfersForDate(db, unleashed, requireDate(req.body?.date), sentBy(req)) }));
+    res.json({ results: await sendTransfersForDate(db, unleashed(), requireDate(req.body?.date), sentBy(req)) }));
   r.post('/unleashed/send/assemblies', async (req, res) =>
-    res.json({ results: await sendAssembliesForDate(db, unleashed, requireDate(req.body?.date), { productionEmail: config.productionEmail, ...sentBy(req) }) }));
-  r.get('/unleashed/status', async (req, res) => res.json({ configured: !!unleashed, ...(await getSyncStatus(db)) }));
-  r.post('/unleashed/sync', async (req, res) => res.json(await syncFromUnleashed(db, unleashed)));
+    res.json({ results: await sendAssembliesForDate(db, unleashed(), requireDate(req.body?.date), { productionEmail: config.productionEmail, ...sentBy(req) }) }));
+  r.get('/unleashed/status', async (req, res) => res.json({ configured: !!unleashed(), ...(await getSyncStatus(db)) }));
+  r.post('/unleashed/sync', async (req, res) => res.json(await syncFromUnleashed(db, unleashed())));
 
   // ---------- users & roles (admins) ----------
-  r.get('/users', async (req, res) => res.json({
-    users: await users.listUsers(db), roles: await users.listRoles(db), lines: LINES,
-    sharedLoginEnabled: await users.sharedLoginEnabled(db),
-  }));
-  r.post('/users', async (req, res) => res.status(201).json(await users.createUser(db, req.body || {})));
-  r.patch('/users/:id', async (req, res) => {
-    if (Number(req.params.id) === req.user.id && req.body?.active === false) throw new UserError('You cannot switch off your own login.');
-    res.json(await users.updateUser(db, Number(req.params.id), req.body || {}));
+  // Users are the customer's; access (role + lines) is per site — this one.
+  const scope = (req) => ({ customerId: req.site.customerId, siteId: req.site.id });
+  r.get('/users', async (req, res) => {
+    const site = await platform.getSite(platformDb, req.site.id);
+    res.json({
+      users: await users.listUsers(platformDb, db, scope(req)), roles: await users.listRoles(db, req.site.id), lines: LINES,
+      site: { id: site.id, name: site.name, supportAccess: site.supportAccess },
+      supportSessions: await platform.listSupportSessions(platformDb, req.site.id),
+    });
   });
-  r.post('/users/:id/reset-password', async (req, res) => res.json(await users.resetPassword(db, Number(req.params.id))));
-  r.get('/roles', async (req, res) => res.json(await users.listRoles(db)));
+  r.post('/users', async (req, res) => {
+    const { id, password } = await users.createUser(platformDb, db, scope(req), req.body || {});
+    const list = await users.listUsers(platformDb, db, scope(req));
+    res.status(201).json({ user: list.find((u) => u.id === id), password });
+  });
+  r.patch('/users/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    if (id === req.user.id && (req.body?.active === false || req.body?.hasAccess === false)) {
+      throw new UserError('You cannot switch off your own login or remove your own access.');
+    }
+    await users.updateUser(platformDb, db, scope(req), id, req.body || {});
+    res.json((await users.listUsers(platformDb, db, scope(req))).find((u) => u.id === id));
+  });
+  r.post('/users/:id/reset-password', async (req, res) => res.json(await users.resetPassword(platformDb, req.site.customerId, Number(req.params.id))));
+  r.get('/roles', async (req, res) => res.json(await users.listRoles(db, req.site.id)));
   r.post('/roles', async (req, res) => res.status(201).json(await users.createRole(db, req.body || {})));
-  r.patch('/roles/:id', async (req, res) => res.json(await users.updateRole(db, Number(req.params.id), req.body || {})));
-  r.delete('/roles/:id', async (req, res) => { await users.deleteRole(db, Number(req.params.id)); res.status(204).end(); });
-  r.put('/settings/shared-login', async (req, res) => {
-    const enabled = req.body?.enabled !== false;
-    if (!enabled && req.user.shared) throw new UserError('Sign in with your own login first — switching the shared login off would sign you out.');
-    res.json(await users.setSharedLogin(db, enabled));
+  r.patch('/roles/:id', async (req, res) => res.json(await users.updateRole(platformDb, db, req.site.id, Number(req.params.id), req.body || {})));
+  r.delete('/roles/:id', async (req, res) => { await users.deleteRole(platformDb, db, req.site.id, Number(req.params.id)); res.status(204).end(); });
+  // Whether platform support may open this site.
+  r.put('/settings/support-access', async (req, res) => {
+    if (req.user.support) throw new UserError('Support can’t change this setting — the customer decides.', 403);
+    await platform.setSupportAccess(platformDb, req.site.id, req.body?.allowed !== false);
+    res.json({ supportAccess: req.body?.allowed !== false });
   });
   r.get('/activity', async (req, res) => res.json(await users.listActivity(db, { limit: req.query.limit, userId: req.query.userId })));
 

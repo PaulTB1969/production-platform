@@ -5,6 +5,7 @@
 import { UserError } from './rows.js';
 import { encrypt, decrypt } from '../secrets.js';
 import { hashPassword, verifyPassword, oneTimePassword, checkNewPassword } from './users.js';
+import { migrateSite } from '../db/migrate.js';
 
 export const TRACKING = ['batch', 'serial', 'both', 'none'];
 const DEFAULT_BASE_URL = 'https://api.unleashedsoftware.com';
@@ -162,6 +163,8 @@ export async function createSite(db, body, { masterKey }) {
   const r = (await db.query(
     `INSERT INTO sites (customer_id, name, api_id, api_key_enc, api_base_url) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
     [customer.id, name, apiId, encrypt(apiKey, masterKey), checkBaseUrl(body?.apiBaseUrl)])).rows[0];
+  // The site's own schema: its production data, roles and activity log.
+  await migrateSite(db, r.id);
   return siteRow(r);
 }
 
@@ -264,4 +267,46 @@ export async function testAndImport(db, id, { masterKey, createClient }) {
     [id, summary.companyGuid, summary.companyName, summary.baseCurrency, summary.defaultTaxRate,
       JSON.stringify(summary.warehouses), summary.productGroupCount, JSON.stringify(summary.productCounts), summary.trackingDetected]);
   return getSite(db, id);
+}
+
+// ---------- support sessions ----------
+// Platform support opening a customer's site: a reason, view-only unless
+// edit is chosen, 2 hours, and only while the site allows support access.
+
+export const SUPPORT_HOURS = 2;
+
+export async function startSupportSession(db, admin, siteId, { reason, mode = 'view' }) {
+  const site = await getSite(db, siteId);
+  if (!site) throw new UserError('Site not found.', 404);
+  if (site.status !== 'active') throw new UserError('This site is inactive.', 409);
+  if (!site.supportAccess) throw new UserError('The customer has switched off support access for this site.', 403);
+  if (!clean(reason)) throw new UserError('Give a reason for opening the site (the customer sees it).');
+  if (!['view', 'edit'].includes(mode)) throw new UserError('Mode is view or edit.');
+  return (await db.query(
+    `INSERT INTO support_sessions (admin_id, admin_name, site_id, reason, mode, expires_at)
+     VALUES ($1, $2, $3, $4, $5, now() + interval '${SUPPORT_HOURS} hours') RETURNING *`,
+    [admin.id, admin.name, siteId, clean(reason), mode])).rows[0];
+}
+
+export async function getSupportSession(db, id) {
+  return (await db.query('SELECT * FROM support_sessions WHERE id = $1', [id])).rows[0] || null;
+}
+
+export async function endSupportSession(db, id) {
+  await db.query('UPDATE support_sessions SET ended_at = now() WHERE id = $1 AND ended_at IS NULL', [id]);
+}
+
+export async function listSupportSessions(db, siteId, { limit = 50 } = {}) {
+  return (await db.query(
+    `SELECT id, admin_name, reason, mode, started_at, expires_at, ended_at FROM support_sessions
+      WHERE site_id = $1 ORDER BY started_at DESC LIMIT $2`, [siteId, limit])).rows
+    .map((r) => ({ id: r.id, adminName: r.admin_name, reason: r.reason, mode: r.mode, startedAt: r.started_at,
+      endsAt: r.ended_at || r.expires_at, ended: !!r.ended_at || new Date(r.expires_at) < new Date() }));
+}
+
+// The customer's own switch (Users & Roles page). Switching it off ends any
+// open support session at once.
+export async function setSupportAccess(db, siteId, allowed) {
+  await db.query('UPDATE sites SET support_access = $2, updated_at = now() WHERE id = $1', [siteId, !!allowed]);
+  if (!allowed) await db.query('UPDATE support_sessions SET ended_at = now() WHERE site_id = $1 AND ended_at IS NULL', [siteId]);
 }

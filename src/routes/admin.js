@@ -28,7 +28,7 @@ const safeEqual = (a, b) => {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 };
 
-export function adminRouter({ db, masterKey, createClient, secure = false, now = () => Date.now() }) {
+export function adminRouter({ db, masterKey, createClient, supportCookie, secure = false, now = () => Date.now() }) {
   const key = createHmac('sha256', 'platform-admin-session').update(masterKey).digest();
   const sign = (s) => createHmac('sha256', key).update(s).digest('base64url');
   const cookieOpts = { httpOnly: true, secure, sameSite: 'strict', maxAge: MAX_AGE_MS, path: '/admin' };
@@ -147,6 +147,18 @@ export function adminRouter({ db, masterKey, createClient, secure = false, now =
       throw err;
     }
   });
+
+  // Support: open a customer's site (view-only unless edit), 2 hours. The
+  // cookie it sets is what the customer app checks; the customer sees the
+  // session on their Users & Roles page.
+  r.post('/api/sites/:id/support', async (req, res) => {
+    const s = await platform.startSupportSession(db, req.admin, Number(req.params.id), { reason: req.body?.reason, mode: req.body?.mode || 'view' });
+    await log(req, `Opened site for support (${s.mode}): ${req.body?.reason}`, { siteId: s.site_id });
+    const c = supportCookie(s.id, s.expires_at);
+    res.cookie(c.name, c.value, c.opts);
+    res.json({ ok: true, url: '/', mode: s.mode, expiresAt: s.expires_at });
+  });
+  r.get('/api/sites/:id/support', async (req, res) => res.json(await platform.listSupportSessions(db, Number(req.params.id))));
 
   r.get('/api/activity', async (req, res) => res.json(await platform.listPlatformActivity(db, { limit: req.query.limit })));
 

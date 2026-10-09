@@ -4,20 +4,17 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db/index.js';
-import { migrate } from '../src/db/migrate.js';
-import { createApp } from '../src/app.js';
+import { startApp } from './helpers.js';
 import { replaceRecipes, replaceComponentBatches, replaceBulkStock, replaceProductGroups } from '../src/services/stock.js';
 import { mapProductGroups } from '../src/unleashed/sync.js';
 
 const DATE = '2026-10-01';
-let db, server, base;
+let app, db, base;
 
-const AUTH = 'Basic ' + Buffer.from('team:secret').toString('base64');
 async function api(method, path, body, headers = {}) {
   const res = await fetch(base + path, {
     method,
-    headers: { Authorization: AUTH, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    headers: { Cookie: app.cookie, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -27,8 +24,9 @@ async function api(method, path, body, headers = {}) {
 }
 
 before(async () => {
-  db = await openDb({});
-  await migrate(db);
+  app = await startApp();
+  db = app.siteDb;
+  base = app.base;
   await replaceRecipes(db, [{
     sku: 'P500', description: 'Signature 500ml', expectedDuration: '2',
     lines: [
@@ -45,17 +43,13 @@ before(async () => {
     { productCode: 'BOTTLE', qtyOnHand: 5300 },
     { productCode: 'LABEL', qtyOnHand: 1000 },
   ]);
-  const config = { auth: { user: 'team', password: 'secret' }, productionEmail: 'prod@example.com' };
-  server = createApp({ db, config, unleashed: null }).listen(0);
-  base = `http://localhost:${server.address().port}`;
 });
 
 after(async () => {
-  server.close();
-  await db.close();
+  await app.close();
 });
 
-test('requires the team login', async () => {
+test('requires a sign-in', async () => {
   assert.equal((await fetch(base + '/api/schedule')).status, 401);
   assert.equal((await fetch(base + '/healthz')).status, 200);
 });
@@ -160,13 +154,13 @@ test('schedule upload: updates a still-scheduled match, otherwise adds', async (
   const csv = 'SKU,Warehouse,Quantity,Date\r\nP500,LWH,70,2026/10/03\r\nP500,AQB,30,2026-10-03\r\n';
   const res = await api('POST', '/api/schedule/upload', undefined, { 'Content-Type': 'text/csv' });
   assert.equal(res.status, 400); // empty body
-  const up = await fetch(base + '/api/schedule/upload', { method: 'POST', headers: { Authorization: AUTH, 'Content-Type': 'text/csv' }, body: csv });
+  const up = await fetch(base + '/api/schedule/upload', { method: 'POST', headers: { Cookie: app.cookie, 'Content-Type': 'text/csv' }, body: csv });
   assert.deepEqual(await up.json(), { created: 1, updated: 1 });
 });
 
 test('Excel download: one workbook with the day, batch numbers kept as text', async () => {
   const ExcelJS = (await import('exceljs')).default;
-  const res = await fetch(base + `/api/workbook.xlsx?from=${DATE}&to=2026-10-02`, { headers: { Authorization: AUTH } });
+  const res = await fetch(base + `/api/workbook.xlsx?from=${DATE}&to=2026-10-02`, { headers: { Cookie: app.cookie } });
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-disposition'), /production-hub-2026-10-01-to-2026-10-02\.xlsx/);
   const wb = new ExcelJS.Workbook();
@@ -190,7 +184,7 @@ test('pick list: per-line sheet with bulk stock, FEFO suggestion and blank check
   const ExcelJS = (await import('exceljs')).default;
   assert.equal((await api('GET', '/api/requisitions/picklist.xlsx?date=2026-01-01')).status, 404);
 
-  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Authorization: AUTH } });
+  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Cookie: app.cookie } });
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-disposition'), /pick-list-2026-10-02\.xlsx/);
   const wb = new ExcelJS.Workbook();
@@ -217,7 +211,7 @@ test('pick list: per-line sheet with bulk stock, FEFO suggestion and blank check
   assert.equal(summary, 'Bulk store holds enough of every material, as of the last Unleashed sync.');
 
   // Line filter: only that line's sheet, named in the file.
-  const one = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02&line=' + encodeURIComponent('PRD - UWH'), { headers: { Authorization: AUTH } });
+  const one = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02&line=' + encodeURIComponent('PRD - UWH'), { headers: { Cookie: app.cookie } });
   assert.match(one.headers.get('content-disposition'), /pick-list-2026-10-02-uwh\.xlsx/);
 });
 
@@ -226,7 +220,7 @@ test('pick list flags materials the bulk store is short of', async () => {
   // 300 cases x 24 = 7,200 bottles > 5,300 in the bulk store.
   await api('POST', '/api/schedule', { sku: 'P500', line: 'PRD - AQB', plannedCases: 300, date: '2026-10-07' });
   await api('POST', '/api/requisitions/generate', { date: '2026-10-07' });
-  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-07', { headers: { Authorization: AUTH } });
+  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-07', { headers: { Cookie: app.cookie } });
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
   const ws = wb.getWorksheet('AQB');
@@ -255,7 +249,7 @@ test('materials list: BOM components with batch-tracked flag, PRD stock and prod
 
   // Pick list: sorted by product group, group named on its first row, ungrouped last.
   const ExcelJS = (await import('exceljs')).default;
-  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Authorization: AUTH } });
+  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Cookie: app.cookie } });
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
   const ws = wb.getWorksheet('UWH');
@@ -263,7 +257,7 @@ test('materials list: BOM components with batch-tracked flag, PRD stock and prod
     [['Raw Materials - Bottles', 'BOTTLE'], ['No product group', 'LABEL']]);
 
   // One product group only.
-  const g = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02&group=' + encodeURIComponent('Raw Materials - Bottles'), { headers: { Authorization: AUTH } });
+  const g = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02&group=' + encodeURIComponent('Raw Materials - Bottles'), { headers: { Cookie: app.cookie } });
   const wb2 = new ExcelJS.Workbook();
   await wb2.xlsx.load(Buffer.from(await g.arrayBuffer()));
   const skus = wb2.getWorksheet('UWH').getRows(5, 10).map((r) => r.getCell(2).value).filter((v) => ['BOTTLE', 'LABEL'].includes(v));
@@ -281,7 +275,7 @@ test('requisitions created by hand: a second one for the same line and date is n
   assert.equal(requisitionName(third), 'PRD - UWH — Upper Warehouse — 2 Oct 2026 (3)');
   // The pick list gets one sheet per requisition.
   const ExcelJS = (await import('exceljs')).default;
-  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Authorization: AUTH } });
+  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Cookie: app.cookie } });
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
   assert.deepEqual(wb.worksheets.map((w) => w.name), ['UWH', 'UWH (2)', 'UWH (3)']);

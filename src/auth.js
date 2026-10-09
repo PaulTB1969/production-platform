@@ -1,26 +1,32 @@
-// Sign-in: a login page that sets a signed "stay signed in" cookie (90 days),
-// so each phone, iPad or laptop logs in once.
+// Sign-in for customers' users, the site they're working in, and platform
+// support sessions.
 //
-// Two kinds of login:
-//   - Individual users (Users & Roles page): sign in with email or cell
-//     number. Cookie "u.<id>.<version>.<expiry>.<HMAC>"; the version is
-//     bumped on a password change, reset or deactivation, which signs that
-//     user out everywhere.
-//   - The shared 'production' login (APP_USER / APP_PASSWORD), with full
-//     access, until it is switched off on the Users page. Cookie
-//     "<expiry>.<HMAC>". Scripts can send it as a Basic auth header.
+// Cookies:
+//   ph_session  "u.<user id>.<version>.<expiry>.<HMAC>" — 90 days. The version
+//               is bumped on a password change, reset or deactivation, which
+//               signs that user out everywhere.
+//   pp_site     the site the user last chose (checked against their access on
+//               every request; not trusted on its own).
+//   pp_support  "s.<support session id>.<expiry>.<HMAC>" — set by the admin
+//               console when platform support opens a site. View-only unless
+//               the session is in edit mode; ends after 2 hours.
 //
-// The HMAC key is derived from APP_PASSWORD, so changing it signs every
-// device out. req.user is set for everything behind the guard.
+// Everything behind the guard runs "inside" its site (tenancy.js): req.user,
+// req.site, and the site's own schema and Unleashed account.
 
 import express from 'express';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import * as users from './services/users.js';
+import * as platform from './services/platform.js';
+import { siteSchema } from './db/index.js';
+import { runInSite } from './tenancy.js';
 
 export const COOKIE = 'ph_session';
+export const SITE_COOKIE = 'pp_site';
+export const SUPPORT_COOKIE = 'pp_support';
 const MAX_AGE_MS = 90 * 24 * 3600 * 1000;
 
-// Reachable without logging in: the login page and what it needs to render.
+// Reachable without signing in: the login page and what it needs to render.
 const PUBLIC_PATHS = new Set(['/login', '/login.html', '/healthz', '/styles.css', '/manifest.webmanifest']);
 const isPublic = (p) => PUBLIC_PATHS.has(p) || p.startsWith('/icons/') || p.startsWith('/brand/');
 
@@ -43,7 +49,7 @@ function safeEqual(a, b) {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-function readCookie(req, name) {
+export function readCookie(req, name) {
   for (const part of (req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
     if (i > -1 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
@@ -58,62 +64,92 @@ function safeNext(v) {
 
 const clientIp = (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
 
-// The user record behind a session, as the routes see it.
-export function sessionUser(u) {
-  return {
-    id: u.id, name: u.name, shared: false, email: u.email, cell: u.cell,
-    roleName: u.role_name, areas: u.areas, actions: u.actions, lines: u.lines || [],
-    mustChangePassword: u.must_change_password,
-  };
+export function sessionKey(masterKey) {
+  return createHmac('sha256', 'production-platform-session').update(masterKey).digest();
 }
 
-const sharedUser = (name) => ({ id: null, name, shared: true, roleName: 'Shared login', ...users.FULL_ACCESS, lines: [], mustChangePassword: false });
-
-export function createAuth({ user, password }, { db = null, secure = false, now = () => Date.now() } = {}) {
-  // Local dev without APP_USER/APP_PASSWORD: open, with full access, unless
-  // someone signs in as one of the users.
-  const devOpen = !user || !password;
-  const key = devOpen ? randomBytes(32) : createHmac('sha256', 'production-hub-session').update(password).digest();
+export function createAuth({ db, masterKey, createClient, secure = false, now = () => Date.now() }) {
+  const key = sessionKey(masterKey);
   const sign = (s) => createHmac('sha256', key).update(String(s)).digest('base64url');
   const cookieOpts = { httpOnly: true, secure, sameSite: 'lax', maxAge: MAX_AGE_MS, path: '/' };
-
-  const sharedOn = async () => !db || users.sharedLoginEnabled(db);
 
   const setUserCookie = (res, u) => {
     const body = `u.${u.id}.${u.session_version}.${now() + MAX_AGE_MS}`;
     res.cookie(COOKIE, `${body}.${sign(body)}`, cookieOpts);
   };
-  const setSharedCookie = (res) => {
-    const exp = now() + MAX_AGE_MS;
-    res.cookie(COOKIE, `${exp}.${sign(exp)}`, cookieOpts);
-  };
 
-  // Cookie / Basic header -> user, or null.
+  // Each site's Unleashed client, rebuilt when its keys change.
+  const clients = new Map(); // site id -> { stamp, client }
+  async function clientFor(site) {
+    if (!createClient) return null;
+    const stamp = String(site.updated_at);
+    const cached = clients.get(site.id);
+    if (cached && cached.stamp === stamp) return cached.client;
+    let client = null;
+    try { client = createClient(await platform.siteCredentials(db, site.id, { masterKey })); } catch { client = null; }
+    clients.set(site.id, { stamp, client });
+    return client;
+  }
+
+  async function siteContext(siteRow) {
+    return {
+      site: { id: siteRow.id, name: siteRow.name, customerId: siteRow.customer_id, tracking: siteRow.tracking_override || siteRow.tracking_detected, timeZone: siteRow.time_zone },
+      db: db.scoped(siteSchema(siteRow.id)),
+      unleashed: await clientFor(siteRow),
+    };
+  }
+
+  // A valid support session (cookie + open session + site still allows it).
+  async function supportFromCookie(req) {
+    const parts = String(readCookie(req, SUPPORT_COOKIE) || '').split('.');
+    if (parts.length !== 4 || parts[0] !== 's') return null;
+    const [, id, exp, sig] = parts;
+    if (!(Number(exp) > now()) || !safeEqual(sig, sign(parts.slice(0, 3).join('.')))) return null;
+    const s = await platform.getSupportSession(db, Number(id));
+    if (!s || s.ended_at || new Date(s.expires_at).getTime() <= now()) return null;
+    const site = (await db.query('SELECT * FROM sites WHERE id = $1', [s.site_id])).rows[0];
+    if (!site || !site.support_access || site.status !== 'active') return null;
+    return { session: s, site };
+  }
+
+  // Cookie -> { user, ctx } or null.
   async function resolve(req) {
-    const v = readCookie(req, COOKIE);
-    if (v) {
-      const parts = v.split('.');
-      if (parts[0] === 'u' && parts.length === 5 && db) {
-        const [, id, ver, exp, sig] = parts;
-        if (Number(exp) > now() && safeEqual(sig, sign(parts.slice(0, 4).join('.')))) {
-          const u = await users.getUserById(db, Number(id));
-          if (u && u.active && String(u.session_version) === ver) return sessionUser(u);
-        }
-      } else if (parts.length === 2 && !devOpen) {
-        const [exp, sig] = parts;
-        if (Number(exp) > now() && safeEqual(sig, sign(exp)) && (await sharedOn())) return sharedUser('Production (shared login)');
-      }
+    const support = await supportFromCookie(req);
+    if (support) {
+      const { session: s, site } = support;
+      const access = s.mode === 'edit' ? users.FULL_ACCESS : users.VIEW_ACCESS;
+      return {
+        user: {
+          id: null, name: `${s.admin_name} (support)`, support: { id: s.id, mode: s.mode, expiresAt: s.expires_at, reason: s.reason },
+          roleName: 'Platform support', ...access, lines: [], mustChangePassword: false,
+          sites: [{ id: site.id, name: site.name }],
+        },
+        ctx: await siteContext(site),
+      };
     }
-    const [scheme, encoded] = (req.headers.authorization || '').split(' ');
-    if (!devOpen && scheme === 'Basic' && encoded) {
-      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-      const i = decoded.indexOf(':');
-      if (i > -1 && safeEqual(decoded.slice(0, i), user) && safeEqual(decoded.slice(i + 1), password) && (await sharedOn())) {
-        return sharedUser('Production (shared login)');
-      }
-    }
-    if (devOpen) return sharedUser('Local dev');
-    return null;
+
+    const parts = String(readCookie(req, COOKIE) || '').split('.');
+    if (parts[0] !== 'u' || parts.length !== 5) return null;
+    const [, id, ver, exp, sig] = parts;
+    if (!(Number(exp) > now()) || !safeEqual(sig, sign(parts.slice(0, 4).join('.')))) return null;
+    const u = await users.getUserById(db, Number(id));
+    if (!u || !u.active || String(u.session_version) !== ver) return null;
+
+    const sites = await users.userSites(db, u.id);
+    const base = {
+      id: u.id, name: u.name, email: u.email, cell: u.cell, customerId: u.customer_id, support: null,
+      mustChangePassword: u.must_change_password, sites: sites.map((s) => ({ id: s.id, name: s.name })),
+    };
+    if (!sites.length) return { user: { ...base, areas: {}, actions: {}, lines: [], roleName: null }, ctx: null };
+    const wanted = Number(readCookie(req, SITE_COOKIE));
+    const access = sites.find((s) => s.id === wanted) || sites[0];
+    const siteRow = (await db.query('SELECT * FROM sites WHERE id = $1', [access.id])).rows[0];
+    const ctx = await siteContext(siteRow);
+    const role = await users.getRole(ctx.db, access.roleId);
+    return {
+      user: { ...base, roleName: role?.name || null, areas: role?.areas || {}, actions: role?.actions || {}, lines: access.lines },
+      ctx,
+    };
   }
 
   // Slows down password guessing: 10 failed attempts per address per 15 min.
@@ -136,71 +172,100 @@ export function createAuth({ user, password }, { db = null, secure = false, now 
     const next = safeNext(req.body?.next);
     const back = (error) => res.redirect(303, `/login?error=${error}&next=` + encodeURIComponent(next));
     if (blocked(ip)) return back('locked');
-    const name = String(req.body?.username || '').trim();
-    const pw = String(req.body?.password || '');
-
-    // The shared login.
-    if (!devOpen && safeEqual(name, user) && safeEqual(pw, password)) {
-      if (!(await sharedOn())) return back('shared-off');
-      failures.delete(ip);
-      setSharedCookie(res);
-      return res.redirect(303, next);
-    }
-
-    // An individual user.
-    const u = db ? await users.findUserForLogin(db, users.loginKey(name)) : null;
-    if (!u || !u.active || !(await users.verifyPassword(pw, u.password_hash))) {
+    const u = await users.findUserForLogin(db, users.loginKey(req.body?.username));
+    if (!u || !u.active || !(await users.verifyPassword(String(req.body?.password || ''), u.password_hash))) {
       fail(ip);
       return back('wrong');
     }
     failures.delete(ip);
     await users.recordLogin(db, u.id);
-    await users.logActivity(db, u, 'Signed in');
+    // Logged in their first site's activity log.
+    const first = (await users.userSites(db, u.id))[0];
+    if (first) await users.logActivity(db.scoped(siteSchema(first.id)), u, 'Signed in');
     setUserCookie(res, u);
+    res.clearCookie(SUPPORT_COOKIE, { path: '/' });
     res.redirect(303, u.must_change_password ? '/account?first=1&next=' + encodeURIComponent(next) : next);
   });
-  router.post('/logout', (req, res) => {
+  router.post('/logout', async (req, res) => {
+    const support = await supportFromCookie(req);
+    if (support) await platform.endSupportSession(db, support.session.id);
     res.clearCookie(COOKIE, { path: '/' });
+    res.clearCookie(SUPPORT_COOKIE, { path: '/' });
     res.redirect(303, '/login');
   });
 
+  const noSitePage = (name) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/styles.css"><div class="wrap" style="margin-top:10vh;"><div class="card card-pad">
+<h1>No site yet</h1><p>Hello ${String(name).replace(/[<>&"]/g, '')} — your login doesn't have access to a site yet. Ask your admin to give you access.</p>
+<form method="post" action="/logout"><button type="submit" class="btn-ghost btn-small">Sign out</button></form></div></div>`;
+
   const guard = async (req, res, next) => {
     if (isPublic(req.path)) return next();
-    const u = await resolve(req);
-    if (!u) {
+    const r = await resolve(req);
+    if (!r) {
       if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Signed out — reload the page and log in again.' });
       return res.redirect(302, '/login?next=' + encodeURIComponent(req.originalUrl));
     }
+    const u = r.user;
     req.user = u;
 
     if (u.mustChangePassword && !ACCOUNT_PATHS.has(req.path) && !isAsset(req.path)) {
       if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Choose your own password first.' });
       return res.redirect(302, '/account?first=1');
     }
+    if (!r.ctx) {
+      if (ACCOUNT_PATHS.has(req.path) || isAsset(req.path)) return next();
+      if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Your login has no site access yet — ask your admin.' });
+      return res.status(403).type('html').send(noSitePage(u.name));
+    }
+    // Support in view mode changes nothing (except ending the session).
+    if (u.support?.mode === 'view' && !['GET', 'HEAD'].includes(req.method) && !['/api/support/end', '/logout'].includes(req.path)) {
+      if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'This support session is view-only.' });
+      return res.status(403).send('This support session is view-only.');
+    }
     const area = PAGE_AREAS[req.path];
     if (area && (u.areas?.[area] || 'none') === 'none') return res.redirect(302, '/?denied=' + area);
     if (ADMIN_PAGES.has(req.path) && !u.actions?.manageUsers) return res.redirect(302, '/?denied=users');
-    next();
+    req.site = r.ctx.site;
+    runInSite(r.ctx, next);
   };
 
-  // The signed-in user's own details and password (mounted after the guard).
+  // The signed-in user's own details, password, site switch, and ending a
+  // support session (mounted after the guard).
   const account = express.Router();
   account.get('/api/me', async (req, res) => {
-    res.json({ ...req.user, sharedLoginEnabled: await sharedOn() });
+    res.json({ ...req.user, site: req.site || null });
   });
   account.post('/api/me/password', express.json(), async (req, res) => {
-    if (req.user.shared) return res.status(400).json({ error: 'The shared login’s password is set on the server, not here.' });
+    if (req.user.support) return res.status(400).json({ error: 'Support sessions have no password here.' });
+    let u;
     try {
-      await users.changePassword(db, req.user.id, { current: req.body?.current, next: req.body?.next },
+      u = await users.changePassword(db, req.user.id, { current: req.body?.current, next: req.body?.next },
         { skipCurrent: req.user.mustChangePassword });
     } catch (err) {
       return res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not change the password.' });
     }
-    await users.logActivity(db, req.user, req.user.mustChangePassword ? 'Set their own password' : 'Changed their password');
     // The change signed out every other device; keep this one signed in.
-    setUserCookie(res, await users.getUserById(db, req.user.id));
+    setUserCookie(res, u);
+    res.json({ ok: true });
+  });
+  account.post('/api/me/site', express.json(), async (req, res) => {
+    const id = Number(req.body?.siteId);
+    if (!req.user.sites.some((s) => s.id === id)) return res.status(403).json({ error: 'You don’t have access to that site.' });
+    res.cookie(SITE_COOKIE, String(id), cookieOpts);
+    res.json({ ok: true });
+  });
+  account.post('/api/support/end', async (req, res) => {
+    if (req.user.support) await platform.endSupportSession(db, req.user.support.id);
+    res.clearCookie(SUPPORT_COOKIE, { path: '/' });
     res.json({ ok: true });
   });
 
-  return { router, guard, account };
+  // For the admin console: the cookie that opens a site for support.
+  const supportCookie = (sessionId, expiresAt) => {
+    const body = `s.${sessionId}.${new Date(expiresAt).getTime()}`;
+    return { name: SUPPORT_COOKIE, value: `${body}.${sign(body)}`, opts: { httpOnly: true, secure, sameSite: 'lax', path: '/', expires: new Date(expiresAt) } };
+  };
+
+  return { router, guard, account, supportCookie };
 }

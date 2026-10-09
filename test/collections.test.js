@@ -5,8 +5,7 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db/index.js';
-import { migrate } from '../src/db/migrate.js';
+import { openSiteDb } from './helpers.js';
 import { replaceRecipes, replaceComponentBatches } from '../src/services/stock.js';
 import { createEntry } from '../src/services/schedule.js';
 import * as coll from '../src/services/collections.js';
@@ -22,8 +21,7 @@ const SKUS = ['GN330ST_MF', 'GN330SP_MF', 'GN750ST_MF', 'P330ST_MFSIG_PN', 'P330
   'B20.0_BIB_TAP_BLUE', 'B20.0_BIB_COOLER_BLUE', 'P500ST_SHIFT_ZP', 'P500SP_SHIFT_ZP', 'P500ST_KAUAI_ZP', 'P750ST_KAUAI_ZP', 'P750ST_NU_ZP'];
 
 beforeEach(async () => {
-  db = await openDb({});
-  await migrate(db);
+  db = await openSiteDb();
   await replaceRecipes(db, SKUS.map((sku) => ({ sku, description: sku, batchTracked: sku !== 'P500SP_SKILPAD_ZP', lines: [] })));
 });
 afterEach(() => db.close());

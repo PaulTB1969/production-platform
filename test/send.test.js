@@ -4,8 +4,7 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db/index.js';
-import { migrate } from '../src/db/migrate.js';
+import { openSiteDb } from './helpers.js';
 import { replaceRecipes } from '../src/services/stock.js';
 import { createEntry, updateEntry } from '../src/services/schedule.js';
 import { generateRequisitions, updateRequisition, getRequisition } from '../src/services/requisitions.js';
@@ -42,8 +41,7 @@ function fakeUnleashed() {
 }
 
 beforeEach(async () => {
-  db = await openDb({});
-  await migrate(db);
+  db = await openSiteDb();
   await replaceRecipes(db, [{
     sku: 'P500', expectedDuration: '40m',
     lines: [

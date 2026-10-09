@@ -95,7 +95,7 @@ const LABELS = [
   [/^POST \/roles$/, 'Added a role'],
   [/^PATCH \/roles\/[^/]+$/, 'Changed a role'],
   [/^DELETE \/roles\/[^/]+$/, 'Deleted a role'],
-  [/^PUT \/settings\/shared-login$/, 'Switched the shared login on/off'],
+  [/^PUT \/settings\/support-access$/, 'Switched platform support access on/off'],
 ];
 
 export function activityLabel(method, path) {

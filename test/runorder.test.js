@@ -3,13 +3,12 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db/index.js';
-import { migrate } from '../src/db/migrate.js';
+import { openSiteDb } from './helpers.js';
 import { applyScheduleRows, listEntries, createEntry, splitEntry, reorderEntries, updateEntry } from '../src/services/schedule.js';
 
 const D = '2026-10-09';
 let db;
-beforeEach(async () => { db = await openDb({}); await migrate(db); });
+beforeEach(async () => { db = await openSiteDb(); });
 afterEach(() => db.close());
 
 const order = async (date = D) => (await listEntries(db, { date })).map((e) => `${e.sku}${e.seq > 1 ? '#' + e.seq : ''}`);
