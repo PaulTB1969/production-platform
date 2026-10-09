@@ -26,7 +26,7 @@ const groupOrder = (a, b) => (a === NO_GROUP) - (b === NO_GROUP) || a.localeComp
 const inGroupFilter = (l) => !state.groupFilter || groupOf(l) === state.groupFilter;
 
 const lineNeedsBatch = (l) => l.needsBatch !== false;
-const requisitionName = (r) => (LINE_LABELS[r.line] || r.line || '') + ' — ' + fmtDateLabel(r.date);
+const requisitionName = (r) => (LINE_LABELS[r.line] || r.line || '') + ' — ' + fmtDateLabel(r.date) + (r.seq > 1 ? ' (' + r.seq + ')' : '');
 
 function requisitionIssues(r) {
   const lines = r.lines || [];
@@ -382,6 +382,20 @@ document.getElementById('genRequestBtn').addEventListener('click', (e) => {
   });
 });
 
+document.getElementById('createReqBtn').addEventListener('click', (e) => {
+  const date = document.getElementById('createDate').value;
+  const line = document.getElementById('createLine').value;
+  if (!date) { showError('Pick a date for the requisition first.'); return; }
+  busy(e.target, 'Creating…', async () => {
+    const r = await api('POST', '/requisitions', { date, line });
+    state.dateFilter = date;
+    document.getElementById('dateFilter').value = date;
+    state.expanded = { [r.id]: true };
+    await loadAll();
+    document.querySelector('.job-card[data-id="' + r.id + '"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+
 for (const key of ['dateFilter', 'lineFilter', 'statusFilter', 'groupFilter']) {
   document.getElementById(key).addEventListener('change', (e) => { state[key] = e.target.value || null; renderJobList(); });
 }
@@ -463,7 +477,7 @@ document.getElementById('sendBtn').addEventListener('click', (e) => {
 // ---------- boot ----------
 
 const today = todayStr();
-for (const id of ['dateFilter', 'exportDate', 'genDate']) document.getElementById(id).value = today;
+for (const id of ['dateFilter', 'exportDate', 'genDate', 'createDate']) document.getElementById(id).value = today;
 state.dateFilter = today;
 
 setupFocus(

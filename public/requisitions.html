@@ -61,6 +61,24 @@
       <button type="button" class="btn-primary btn-small" id="genRequestBtn">Generate</button>
     </div>
     <div class="export-note" id="genStatusNote" style="margin-top:8px;"></div>
+
+    <div class="section-title" style="margin-top:18px;">Create a requisition</div>
+    <div class="export-note" style="margin-top:-4px;">An empty requisition for one line, to fill in by hand. Use it for a top-up or anything not on the schedule. A line that already has a requisition for the date gets the next number, e.g. "(2)".</div>
+    <div class="filter-row" style="margin-top:10px;">
+      <div class="field">
+        <label for="createDate">Date</label>
+        <input id="createDate" type="date">
+      </div>
+      <div class="field">
+        <label for="createLine">Line</label>
+        <select id="createLine">
+          <option value="PRD - UWH">PRD - UWH — Upper Warehouse</option>
+          <option value="PRD - LWH">PRD - LWH — Lower Warehouse</option>
+          <option value="PRD - AQB">PRD - AQB — AcquaBoxe</option>
+        </select>
+      </div>
+      <button type="button" class="btn-primary btn-small" id="createReqBtn">Create</button>
+    </div>
   </div>
 
   <div class="filter-row" id="reqListSection" data-view-ok>

@@ -41,6 +41,7 @@ export function requisitionFromRow(r, lines = []) {
     id: r.id,
     date: r.date,
     line: r.line,
+    seq: r.seq ?? 1,
     status: r.status,
     transferNumber: r.transfer_number,
     exportedAt: iso(r.exported_at),

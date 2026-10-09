@@ -119,7 +119,7 @@ function fmtDateLabel(dateStr) {
 // Shown on screen and sent as the transfer Comments, e.g.
 // "PRD - UWH — Upper Warehouse — 1 Oct 2026".
 export function requisitionName(req) {
-  return (LINE_LABELS[req.line] || req.line || '') + ' — ' + fmtDateLabel(req.date);
+  return (LINE_LABELS[req.line] || req.line || '') + ' — ' + fmtDateLabel(req.date) + (req.seq > 1 ? ` (${req.seq})` : '');
 }
 
 export function transferRows(req, transferNumber) {

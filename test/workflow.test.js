@@ -270,3 +270,19 @@ test('materials list: BOM components with batch-tracked flag, PRD stock and prod
   assert.deepEqual(skus, ['BOTTLE']);
   assert.equal((await api('GET', '/api/requisitions/picklist.xlsx?date=2026-10-02&group=Nothing')).status, 404);
 });
+
+test('requisitions created by hand: a second one for the same line and date is numbered', async () => {
+  const first = (await api('POST', '/api/requisitions', { date: '2026-10-02', line: 'PRD - UWH' })).data;
+  assert.equal(first.seq, 2); // the generated one for that day is 1
+  const third = (await api('POST', '/api/requisitions', { date: '2026-10-02', line: 'PRD - UWH' })).data;
+  assert.equal(third.seq, 3);
+  assert.equal(third.lines.length, 0);
+  const { requisitionName } = await import('../src/domain/requisitions.js');
+  assert.equal(requisitionName(third), 'PRD - UWH — Upper Warehouse — 2 Oct 2026 (3)');
+  // The pick list gets one sheet per requisition.
+  const ExcelJS = (await import('exceljs')).default;
+  const res = await fetch(base + '/api/requisitions/picklist.xlsx?date=2026-10-02', { headers: { Authorization: AUTH } });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ['UWH', 'UWH (2)', 'UWH (3)']);
+});

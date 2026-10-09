@@ -8,7 +8,7 @@ import { recipeMap, balanceMap } from './stock.js';
 import { buildRequisitions, requisitionIssues } from '../domain/requisitions.js';
 import { LINES, requisitionId } from '../domain/lines.js';
 
-const REQ_COLS = `id, to_char(date, 'YYYY-MM-DD') AS date, line, status, transfer_number,
+const REQ_COLS = `id, to_char(date, 'YYYY-MM-DD') AS date, line, seq, status, transfer_number,
   exported_at, generated_at, created_at, updated_at, unleashed_guid, send_started_at, send_error`;
 
 export async function listRequisitions(q, { date, from, to, line } = {}) {
@@ -19,7 +19,7 @@ export async function listRequisitions(q, { date, from, to, line } = {}) {
   if (to) { params.push(to); where.push(`date <= $${params.length}`); }
   if (line) { params.push(line); where.push(`line = $${params.length}`); }
   const rows = (await q.query(
-    `SELECT ${REQ_COLS} FROM requisitions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY date DESC, line`,
+    `SELECT ${REQ_COLS} FROM requisitions ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY date DESC, line, seq`,
     params,
   )).rows;
   if (rows.length === 0) return [];
@@ -77,17 +77,17 @@ export async function generateRequisitions(db, date) {
   });
 }
 
-// Hand-made requisition (rare — normally generated).
+// Hand-made requisition, empty — add the raw materials after. A line that
+// already has one for the date gets the next number: "… — 9 Oct 2026 (2)".
 export async function createRequisition(db, { date, line }) {
   if (!LINES.includes(line)) throw new UserError(`Unknown line "${line}".`);
-  const id = requisitionId(date, line);
-  try {
-    await db.query('INSERT INTO requisitions (id, date, line) VALUES ($1, $2, $3)', [id, date, line]);
-  } catch (err) {
-    if (err.code === '23505') throw new UserError('That line already has a requisition for this date.', 409);
-    throw err;
-  }
-  return getRequisition(db, id);
+  return db.tx(async (q) => {
+    const { m } = (await q.query('SELECT MAX(seq) AS m FROM requisitions WHERE date = $1 AND line = $2', [date, line])).rows[0];
+    const seq = (m || 0) + 1;
+    const id = requisitionId(date, line) + (seq > 1 ? '_' + seq : '');
+    await q.query('INSERT INTO requisitions (id, date, line, seq) VALUES ($1, $2, $3, $4)', [id, date, line, seq]);
+    return getRequisition(q, id);
+  });
 }
 
 // Updates lines and/or status.

@@ -53,7 +53,7 @@ function suggestBatches(batches, need) {
 }
 
 function addLineSheet(wb, req, bulk, onHand, generatedAt) {
-  const ws = wb.addWorksheet(lineShortCode(req.line), {
+  const ws = wb.addWorksheet(lineShortCode(req.line) + (req.seq > 1 ? ' (' + req.seq + ')' : ''), {
     pageSetup: {
       paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
       margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
@@ -157,7 +157,7 @@ function addLineSheet(wb, req, bulk, onHand, generatedAt) {
 
 // Throws nothing for an empty day — returns null so the route can say so.
 export async function buildPickList(db, { date, line, group }) {
-  let reqs = (await listRequisitions(db, { date, line })).sort((a, b) => (a.line < b.line ? -1 : 1));
+  let reqs = (await listRequisitions(db, { date, line })).sort((a, b) => (a.line < b.line ? -1 : a.line > b.line ? 1 : a.seq - b.seq));
   if (group !== undefined) {
     reqs = reqs.map((r) => ({ ...r, lines: r.lines.filter((l) => (l.group || '') === group) })).filter((r) => r.lines.length);
   }
