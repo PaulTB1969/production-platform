@@ -182,9 +182,9 @@ function renderJobDetail(id, entry, recipe, status) {
         '<input type="number" min="0" step="1" data-edit="wastageCases" data-num data-id="' + id + '" value="' + (hasValue(entry.wastageCases) ? entry.wastageCases : '') + '" placeholder="0"></div>' +
     '</div>';
 
-  out += '<div class="section-title">Bill of Materials</div>';
+  out += '<div class="section-title">Component Parts</div>';
   if (recipe && recipe.lines && recipe.lines.some((l) => l.isBatchTracked !== false)) {
-    out += '<div class="duration-note" style="margin-top:-4px; margin-bottom:2px;">Batch choices below are what\'s been sent to ' + escapeHtml(entry.line || 'this line') + ' via completed Stock Requisitions, less what production has already used.</div>';
+    out += '<div class="duration-note help" style="margin-top:-4px; margin-bottom:2px;">Batch choices below are what\'s been sent to ' + escapeHtml(entry.line || 'this line') + ' via completed Stock Requisitions, less what production has already used.</div>';
   }
   if (!recipe || !recipe.lines || recipe.lines.length === 0) {
     out += '<div class="no-recipe">No BOM found for this SKU in Unleashed — nothing to check here. You can still record actual cases above.</div>';
