@@ -272,6 +272,12 @@ async function pickBatches(id, sku) {
     required,
     batches: (state.bulk[sku]?.batches || []).map((b) => ({ batchNumber: b.batchNumber, expiryDate: b.expiryDate, available: b.quantityRemaining })),
     selected: mine.filter((l) => l.batchNumber).map((l) => ({ batchNumber: l.batchNumber, qty: l.qtyUsed })),
+    // Raw materials receipted since the last sync show up straight away.
+    refresh: async () => {
+      const live = await api('GET', '/stock/live-batches?sku=' + encodeURIComponent(sku));
+      state.bulk[sku] = { componentSku: sku, batches: live.batches };
+      return live.batches.map((b) => ({ batchNumber: b.batchNumber, expiryDate: b.expiryDate, available: b.quantityRemaining }));
+    },
   });
   if (!picked) return;
   const description = mine[0]?.description || '';

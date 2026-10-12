@@ -310,12 +310,13 @@ async function pickBatches(lineId) {
   const x = loadOf(l, truck);
   const elsewhere = loadedTotal(l) - (Number(x?.qty) || 0);
   const entries = entriesOf(x).map((e) => ({ batchNumber: e.batch, qty: e.qty ?? x?.qty ?? 0 }));
-  const batches = (state.stock.batches[l.sku] || []).map((b) => ({
+  const toRows = () => (state.stock.batches[l.sku] || []).map((b) => ({
     batchNumber: b.batchNumber,
     expiryDate: b.expiryDate || '',
     available: b.qty - allocated(l.sku, b.batchNumber, x?.id),
     note: b.source === 'unleashed' ? 'in PRD' : (b.note || 'Production Schedule'),
   }));
+  const batches = toRows();
   const picked = await openBatchDialog({
     title: l.sku,
     subtitle: (l.description || '') + ' · ' + (vehicleOf(truck)?.name || truck),
@@ -324,6 +325,15 @@ async function pickBatches(lineId) {
     selected: entries,
     allowOther: true,
     qtyLabel: 'Qty Trf',
+    // Finished goods assembled since the last sync show up straight away
+    // (a schedule batch now in PRD shows once, as "in PRD").
+    refresh: async () => {
+      const live = await api('GET', '/stock/live-batches?sku=' + encodeURIComponent(l.sku));
+      const inPrd = live.batches.map((b) => ({ batchNumber: b.batchNumber, qty: b.quantityRemaining, expiryDate: b.expiryDate, source: 'unleashed' }));
+      const planned = (state.stock.batches[l.sku] || []).filter((b) => b.source !== 'unleashed' && !inPrd.some((p) => p.batchNumber === b.batchNumber));
+      state.stock.batches[l.sku] = [...inPrd, ...planned];
+      return toRows();
+    },
   });
   if (!picked) return;
   const list = picked.map((p) => ({ batch: p.batchNumber, qty: p.qty }));

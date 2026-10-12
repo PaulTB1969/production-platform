@@ -122,6 +122,24 @@ export async function listComponentBatches(db) {
   return out;
 }
 
+// One product's PRD batches, fresh from Unleashed (the batch pop-up checks
+// before showing them): replaces just that product's rows, and returns its
+// batches as listComponentBatches does.
+export async function replaceBatchesForSku(db, sku, batches, syncedAt = new Date()) {
+  await db.tx(async (q) => {
+    await q.query('DELETE FROM component_batches WHERE component_sku = $1', [sku]);
+    for (const b of batches) {
+      await q.query(
+        `INSERT INTO component_batches (component_sku, batch_number, quantity_remaining, original_qty, expiry_date, created_on, synced_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (component_sku, batch_number) DO UPDATE SET quantity_remaining = component_batches.quantity_remaining + EXCLUDED.quantity_remaining`,
+        [sku, b.batchNumber, b.quantityRemaining || 0, b.originalQty ?? null, b.expiryDate || null, b.createdOn || null, syncedAt],
+      );
+    }
+  });
+  return (await listComponentBatches(db))[sku]?.batches || [];
+}
+
 export async function replaceComponentBatches(db, batches, syncedAt = new Date()) {
   await db.tx(async (q) => {
     await q.query('DELETE FROM component_batches');

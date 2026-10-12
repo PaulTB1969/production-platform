@@ -12,6 +12,8 @@
 //   wastage: false,                  // also ask for wastage per batch
 //   allowOther: false,               // a batch typed in that isn't listed
 //   qtyLabel: 'Quantity',
+//   refresh: async () => batches,    // optional: fetch the latest list (e.g.
+//                                    // live from Unleashed) while it's open
 // }) -> Promise<[{ batchNumber, qty, wastage }] | null>   (null = cancelled)
 
 import { escapeHtml, fmtNum } from './common.js';
@@ -22,7 +24,7 @@ const num = (v) => {
 };
 
 export function openBatchDialog(opts) {
-  const { title, subtitle = '', required = null, batches = [], selected = [], wastage = false, allowOther = false, qtyLabel = 'Quantity' } = opts;
+  const { title, subtitle = '', required = null, batches = [], selected = [], wastage = false, allowOther = false, qtyLabel = 'Quantity', refresh = null } = opts;
   // Listed batches, plus any already selected that are no longer listed.
   const rows = batches.map((b) => ({ ...b }));
   for (const s of selected) {
@@ -40,6 +42,7 @@ export function openBatchDialog(opts) {
         '<label>Filter batch number <input type="text" class="bd-filter" autocomplete="off"></label>' +
         '<span class="bd-links"><button type="button" class="bd-link" data-oldest>Select oldest</button> | <button type="button" class="bd-link" data-none>Select none</button></span>' +
       '</div>' +
+      (refresh ? '<div class="bd-live">Checking Unleashed for new batches…</div>' : '') +
       '<div class="bd-scroll"><table class="bd-table"><thead><tr><th>Batch number</th><th>Expiry</th><th class="num">Available</th>' +
         '<th class="num">' + escapeHtml(qtyLabel) + '</th>' + (wastage ? '<th class="num">Wastage</th>' : '') + '</tr></thead><tbody></tbody></table></div>' +
       (allowOther ? '<div class="bd-other"><span>Another batch:</span><input type="text" class="bd-other-batch" placeholder="batch number" autocomplete="off">' +
@@ -157,6 +160,27 @@ export function openBatchDialog(opts) {
   }
 
   draw();
+
+  // The latest list (new receipts / assemblies since the last sync): replaces
+  // the listed batches, keeping what's selected and anything typed in.
+  if (refresh) {
+    const live = dlg.querySelector('.bd-live');
+    refresh().then((fresh) => {
+      if (!done) return;
+      const before = new Set(rows.map((r) => r.batchNumber));
+      const added = fresh.filter((b) => !before.has(b.batchNumber)).length;
+      const keep = rows.filter((r) => !fresh.some((b) => b.batchNumber === r.batchNumber) && (pick.has(r.batchNumber) || r.note === 'typed in'));
+      rows.splice(0, rows.length, ...fresh.map((b) => ({ ...b })), ...keep.map((r) => (r.note === 'typed in' ? r : { ...r, available: null, note: 'not in Unleashed now' })));
+      draw();
+      live.textContent = 'Up to date with Unleashed' + (added ? ' · ' + added + ' new batch' + (added === 1 ? '' : 'es') + ' found' : '');
+      live.classList.add(added ? 'new' : 'ok');
+    }).catch(() => {
+      if (!done) return;
+      live.textContent = 'Couldn’t check Unleashed just now — showing batches as of the last sync.';
+      live.classList.add('warn');
+    });
+  }
+
   return new Promise((resolve) => {
     done = resolve;
     dlg.showModal();

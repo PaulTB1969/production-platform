@@ -6,7 +6,7 @@ import * as stock from '../services/stock.js';
 import * as exportsSvc from '../services/exports.js';
 import { parseScheduleCsv, SCHEDULE_TEMPLATE_CSV } from '../domain/schedule.js';
 import { parseFlexibleDate } from '../domain/csv.js';
-import { syncFromUnleashed, getSyncStatus } from '../unleashed/sync.js';
+import { syncFromUnleashed, getSyncStatus, mapBatchNumbers } from '../unleashed/sync.js';
 import { buildWorkbook } from '../services/workbook.js';
 import { buildPickList } from '../services/picklist.js';
 import { sendTransfersForDate, sendAssembliesForDate, sendTruck, sendArrival } from '../services/unleashedSend.js';
@@ -17,7 +17,7 @@ import * as platform from '../services/platform.js';
 import { currentSite } from '../tenancy.js';
 import * as samples from '../services/samples.js';
 import { lineSheets } from '../services/linesheets.js';
-import { LINES } from '../domain/lines.js';
+import { LINES, BULK_STORE } from '../domain/lines.js';
 import { requiredFor, denialFor, lineAllowed, activityLabel, activityDetail } from '../permissions.js';
 
 const requireDate = (v) => {
@@ -72,6 +72,17 @@ export function apiRouter({ db, platformDb, config, unleashed }) {
   // ---------- reference data ----------
   r.get('/recipes', async (req, res) => res.json(await stock.listRecipes(db)));
   r.get('/stock/bulk', async (req, res) => res.json(await stock.listComponentBatches(db)));
+  // One product's PRD batches straight from Unleashed (a few seconds) — so
+  // stock receipted or assembled since the hourly sync shows up at once.
+  r.get('/stock/live-batches', async (req, res) => {
+    const sku = String(req.query.sku || '').trim();
+    if (!sku) throw new UserError('Which product?');
+    const client = unleashed();
+    if (!client) throw new UserError('This site is not connected to Unleashed yet.', 503);
+    const items = await client.getAll('BatchNumbers', { productCode: sku, warehouseCode: BULK_STORE }, 200);
+    const batches = mapBatchNumbers(items).filter((b) => b.componentSku === sku);
+    res.json({ sku, checkedAt: new Date().toISOString(), batches: await stock.replaceBatchesForSku(db, sku, batches) });
+  });
   r.get('/stock/lines', async (req, res) => res.json(await stock.listLineBatches(db)));
   r.get('/stock/balances', async (req, res) => res.json(await stock.listBalances(db)));
   r.get('/stock/materials', async (req, res) => res.json(await stock.listMaterials(db)));
