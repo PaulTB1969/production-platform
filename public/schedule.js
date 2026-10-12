@@ -616,7 +616,7 @@ document.getElementById('exportDate').addEventListener('change', renderExportHis
 // ---------- boot ----------
 
 const today = todayStr();
-for (const id of ['jobDate', 'dateFilter', 'exportDate']) document.getElementById(id).value = today;
+for (const id of ['jobDate', 'dateFilter', 'exportDate', 'sheetDate']) document.getElementById(id).value = today;
 state.dateFilter = today;
 
 setupFocus(
@@ -637,3 +637,55 @@ setupFocus(
 renderSyncBanner();
 loadAll().catch((err) => showError('Could not load the schedule: ' + err.message));
 renderExportHistory().catch(() => {});
+
+// ---------- printed line sheets ----------
+// The paper forms: blank to complete by hand, or filled in from the app.
+
+const slashDate = (d) => String(d || '').replace(/-/g, '/');
+const SPARE_ROWS = 2; // empty rows per section for anything added on the day
+
+function lineSheetHtml(sheet, filled) {
+  const head = (title) => '<tr class="sec"><th class="prod">' + escapeHtml(title) + '</th><th>Prod Req</th>' +
+    '<th class="grp">Qty Prod</th><th>Prod Date</th>' +
+    '<th class="grp">Bottles</th><th>Batch No_1</th><th>Qty Used_1</th>' +
+    '<th class="grp">Closures</th><th>Batch No_2</th><th>Qty Used_2</th></tr>';
+  const cell = (v, cls = '') => '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + (filled && v !== null && v !== undefined ? escapeHtml(v) : '') + '</td>';
+  let rows = '';
+  for (const sec of sheet.sections) {
+    rows += head(sec.heading);
+    for (const r of sec.rows) {
+      rows += '<tr><td class="prod">' + escapeHtml(r.sku) + '</td><td class="num">' + escapeHtml(fmtNum(r.planned)) + '</td>' +
+        '<td class="num grp">' + (filled && r.produced !== null ? escapeHtml(fmtNum(r.produced)) : '') + '</td>' + cell(slashDate(r.prodDate), 'c') +
+        cell(r.bottleSku, 'grp') + cell(r.bottleBatch) + cell(r.bottleQty, 'num') +
+        cell(r.closureSku, 'grp') + cell(r.closureBatch) + cell(r.closureQty, 'num') + '</tr>';
+    }
+    for (let i = 0; i < SPARE_ROWS; i++) {
+      rows += '<tr><td class="prod"></td><td></td><td class="grp"></td><td></td><td class="grp"></td><td></td><td></td><td class="grp"></td><td></td><td></td></tr>';
+    }
+  }
+  let dest = '';
+  for (const sec of sheet.sections) {
+    const t = sec.destinationTable;
+    if (!t) continue;
+    dest += '<table class="ls-dest"><tr><th style="background:none; border-top:0; border-left:0;"></th>' +
+      t.destinations.map((d) => '<th>' + escapeHtml(d) + '</th>').join('') + '</tr>' +
+      t.rows.map((r) => '<tr><td>' + escapeHtml(r.sku) + '</td>' + r.qty.map((q) => '<td class="num">' + (q === null ? '' : escapeHtml(fmtNum(q))) + '</td>').join('') + '</tr>').join('') +
+      '</table>';
+  }
+  return '<div class="ls-page"><div class="ls-date">Production Schedule - ' + escapeHtml(slashDate(sheet.date)) + '</div>' +
+    '<table class="ls-table">' + rows + '</table>' + dest +
+    '<div class="ls-foot">Completed by: <span class="line"></span> &nbsp; Signature: <span class="line"></span></div></div>';
+}
+
+async function printLineSheets(btn, filled) {
+  const date = document.getElementById('sheetDate').value;
+  if (!date) { showError('Pick a production date first.'); return; }
+  await busy(btn, 'Preparing…', async () => {
+    const sheets = (await api('GET', '/schedule/linesheets?date=' + date)).filter((s) => s.sections.some((x) => x.rows.length));
+    if (!sheets.length) throw new Error('No jobs on the Production Schedule for ' + slashDate(date) + '.');
+    document.getElementById('printArea').innerHTML = sheets.map((s) => lineSheetHtml(s, filled)).join('');
+    window.print();
+  });
+}
+document.getElementById('printBlankSheetsBtn').addEventListener('click', (e) => printLineSheets(e.target, false));
+document.getElementById('printFilledSheetsBtn').addEventListener('click', (e) => printLineSheets(e.target, true));

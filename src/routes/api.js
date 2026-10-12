@@ -16,6 +16,7 @@ import * as users from '../services/users.js';
 import * as platform from '../services/platform.js';
 import { currentSite } from '../tenancy.js';
 import * as samples from '../services/samples.js';
+import { lineSheets } from '../services/linesheets.js';
 import { LINES } from '../domain/lines.js';
 import { requiredFor, denialFor, lineAllowed, activityLabel, activityDetail } from '../permissions.js';
 
@@ -105,6 +106,9 @@ export function apiRouter({ db, platformDb, config, unleashed }) {
     await schedule.deleteEntry(db, req.params.id);
     res.status(204).end();
   });
+  // Printable line sheets (the paper forms), blank or filled in.
+  r.get('/schedule/linesheets', async (req, res) =>
+    res.json(await lineSheets(db, requireDate(req.query.date), { lineFilter: (line) => lineAllowed(req.user, line) })));
   r.get('/schedule/template.csv', (req, res) => sendCsv(res, { filename: 'batch-sheet-schedule-template.csv', csv: SCHEDULE_TEMPLATE_CSV }));
   r.post('/schedule/upload', async (req, res) => {
     const parsed = parseScheduleCsv(typeof req.body === 'string' ? req.body : '');

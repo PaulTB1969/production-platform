@@ -280,3 +280,18 @@ test('requisitions created by hand: a second one for the same line and date is n
   await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
   assert.deepEqual(wb.worksheets.map((w) => w.name), ['UWH', 'UWH (2)', 'UWH (3)']);
 });
+
+test('line sheets: the day per warehouse, filled in with cases and bottle batches', async () => {
+  const sheets = (await api('GET', `/api/schedule/linesheets?date=${DATE}`)).data;
+  assert.deepEqual(sheets.map((s) => s.form), ['UWH', 'LWH']);
+  const uwh = sheets[0].sections[0];
+  assert.equal(uwh.heading, 'UWH - Production Schedule');
+  const first = uwh.rows[0];
+  // Job 1: 10 cases, 240 bottles used + 4 wasted from B-SOON (bottles are told apart by product group).
+  assert.deepEqual(
+    [first.sku, first.planned, first.produced, first.prodDate, first.bottleSku, first.bottleBatch, first.bottleQty, first.closureBatch],
+    ['P500', 10, 10, DATE, 'BOTTLE', 'B-SOON', '244', ''],
+  );
+  assert.deepEqual(sheets[1].sections.map((s) => s.heading), ['LWH - Production Schedule', 'AcquaBox']);
+  assert.equal((await api('GET', '/api/schedule/linesheets')).status, 400);
+});
