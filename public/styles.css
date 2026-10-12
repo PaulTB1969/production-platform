@@ -1,29 +1,29 @@
-/* Shared styles. Layout carried over from the artifacts; colours, type and
-   shapes follow mountainfalls.co.za — black and white on a warm off-white,
-   Instrument Sans, square uppercase buttons. Status colours (good / warn /
+/* Shared styles. Colours, type and shapes follow acquabox.co.za: black on a
+   light neutral grey, white cards with soft grey borders, rounded corners,
+   black buttons in normal case. Its fonts (Neue Haas Unica, Apercu) are
+   licensed to that site, so Inter stands in. Status colours (good / warn /
    danger) stay, muted, because they carry meaning on the floor.
-   Headings: the website's "sweet-gothic" is an Adobe font licensed to that
-   site, so Tenor Sans (used on the site too) stands in. */
+   Text with class "help" is hidden for now (kept for a future Help switch). */
   :root{
-    --bg:#fcfaf7; --surface:#ffffff; --surface-2:#f5f2ed;
-    --border:#e7e2da; --border-strong:#cfc8bd;
-    --text:#111111; --text-muted:#4d4d4d; --text-faint:#85807a;
+    --bg:#f7f7f7; --surface:#ffffff; --surface-2:#f2f2f2;
+    --border:#e6e6e6; --border-strong:#cccccc;
+    --text:#000000; --text-muted:#6e6e6e; --text-faint:#8f8f8f;
     --accent:#000000; --accent-strong:#000000; --accent-ink:#ffffff;
-    --accent-soft:#f0ece6; --accent-soft-line:#d8d1c6;
-    --good:#2f6b3f; --good-soft:#e6f0e6; --good-soft-line:#bcd8be;
+    --accent-soft:#ededed; --accent-soft-line:#d9d9d9;
+    --good:#4c7b5a; --good-soft:#e8f0ea; --good-soft-line:#bcd3c2;
     --warn:#94621c; --warn-soft:#f6ecd9; --warn-soft-line:#e3c792;
-    --danger:#a8352a; --danger-soft:#f7e3df; --danger-soft-line:#e5b4aa;
+    --danger:#a6392b; --danger-soft:#f6e2df; --danger-soft-line:#e3b2aa;
     --shadow:0 1px 2px rgba(0,0,0,.04);
-    --font-display:'Tenor Sans', 'Instrument Sans', system-ui, sans-serif;
-    --font-body:'Instrument Sans', system-ui, -apple-system, sans-serif;
+    --font-display:'Inter', system-ui, -apple-system, sans-serif;
+    --font-body:'Inter', system-ui, -apple-system, sans-serif;
     --font-mono:'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
-    --radius:4px;
+    --radius:9px;
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
       --bg:#0e0e0e; --surface:#171717; --surface-2:#1f1f1f;
       --border:#2c2c2c; --border-strong:#3d3d3d;
-      --text:#f5f2ed; --text-muted:#b8b3ab; --text-faint:#7d7871;
+      --text:#f5f5f5; --text-muted:#b3b3b3; --text-faint:#7d7d7d;
       --accent:#ffffff; --accent-strong:#ffffff; --accent-ink:#000000;
       --accent-soft:rgba(255,255,255,.08); --accent-soft-line:rgba(255,255,255,.22);
       --good:#7fc28b; --good-soft:rgba(127,194,139,.14); --good-soft-line:rgba(127,194,139,.34);
@@ -35,7 +35,7 @@
   :root[data-theme="dark"]{
     --bg:#0e0e0e; --surface:#171717; --surface-2:#1f1f1f;
     --border:#2c2c2c; --border-strong:#3d3d3d;
-    --text:#f5f2ed; --text-muted:#b8b3ab; --text-faint:#7d7871;
+    --text:#f5f5f5; --text-muted:#b3b3b3; --text-faint:#7d7d7d;
     --accent:#ffffff; --accent-strong:#ffffff; --accent-ink:#000000;
     --accent-soft:rgba(255,255,255,.08); --accent-soft-line:rgba(255,255,255,.22);
     --good:#7fc28b; --good-soft:rgba(127,194,139,.14); --good-soft-line:rgba(127,194,139,.34);
@@ -53,7 +53,10 @@
     -webkit-font-smoothing:antialiased;
   }
   .wrap{max-width:760px; margin:0 auto; display:flex; flex-direction:column; gap:20px;}
-  h1,h2,h3{font-family:var(--font-display); font-weight:400; margin:0; text-wrap:balance; text-transform:uppercase; letter-spacing:.06em;}
+  h1,h2,h3{font-family:var(--font-display); font-weight:700; margin:0; text-wrap:balance; letter-spacing:-.01em;}
+  /* Page titles in capitals, like the site's hero heading. */
+  .page-head h1{text-transform:uppercase; letter-spacing:.04em;}
+  .help{display:none !important;}
   .eyebrow{font-family:var(--font-body); font-weight:500; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);}
   .page-head{display:flex; flex-direction:column; gap:4px;}
   .page-head h1{font-size:26px; color:var(--text);}
@@ -94,15 +97,14 @@
   .field label{font-size:11.5px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;}
   input,select,textarea{
     font-family:var(--font-body); font-size:14.5px; color:var(--text);
-    background:var(--surface); border:1px solid var(--border-strong); border-radius:3px;
+    background:var(--surface); border:1px solid var(--border-strong); border-radius:7px;
     padding:9px 10px; width:100%;
   }
   input:focus,select:focus,textarea:focus{outline:2px solid var(--accent); outline-offset:1px;}
   input[type="number"]{font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
   button{
     font-family:var(--font-body); font-weight:500; font-size:13px; cursor:pointer;
-    text-transform:uppercase; letter-spacing:.08em;
-    border-radius:0; border:1px solid transparent; padding:10px 16px;
+    border-radius:7px; border:1px solid transparent; padding:10px 16px;
     transition:background .12s, color .12s, border-color .12s;
   }
   button:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
@@ -117,8 +119,8 @@
   /* Links styled as buttons (downloads) look the same as real buttons. */
   a.btn-primary, a.btn-ghost{
     display:inline-block; font-family:var(--font-body); font-weight:500; font-size:13px;
-    text-transform:uppercase; letter-spacing:.08em; text-decoration:none;
-    border:1px solid; border-radius:0; padding:10px 16px; line-height:1.45;
+    text-decoration:none;
+    border:1px solid; border-radius:7px; padding:10px 16px; line-height:1.45;
   }
   a.btn-primary.btn-small, a.btn-ghost.btn-small{padding:7px 12px; font-size:11.5px;}
   .filter-row{display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; scroll-margin-top:18px;}
@@ -256,7 +258,7 @@
   .menu-toggle{background:none; border:1px solid transparent; border-radius:var(--radius); color:var(--text); font-size:22px; line-height:1; padding:6px 12px; text-transform:none; letter-spacing:0;}
   .menu-toggle:hover, .menu-toggle[aria-expanded="true"]{border-color:var(--border-strong); background:var(--surface);}
   .menu-list{position:absolute; right:0; top:calc(100% + 6px); z-index:20; min-width:250px; background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius); box-shadow:0 8px 24px rgba(0,0,0,.12); padding:6px 0; display:flex; flex-direction:column;}
-  .menu-list a{display:block; padding:11px 16px; font-size:12.5px; font-weight:500; text-transform:uppercase; letter-spacing:.08em; color:var(--text-muted); text-decoration:none; border-left:3px solid transparent;}
+  .menu-list a{display:block; padding:11px 16px; font-size:14px; font-weight:500; color:var(--text-muted); text-decoration:none; border-left:3px solid transparent;}
   .menu-list a:hover{color:var(--text); background:var(--surface-2);}
   .menu-list a[aria-current="page"]{color:var(--text); border-left-color:var(--text);}
   .support-banner{position:sticky; top:0; z-index:30; margin:-20px -16px 16px; padding:9px 16px; background:var(--warn-soft); color:var(--warn); border-bottom:1px solid var(--warn-soft-line); font-size:13px; text-align:center;}
@@ -264,7 +266,7 @@
   .menu-who{margin-top:6px; padding:10px 16px 4px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-faint);}
   .menu-who b{color:var(--text); font-weight:600;}
   .menu-list form{margin:0;}
-  .menu-signout{display:block; width:100%; text-align:left; background:none; border:0; border-left:3px solid transparent; border-radius:0; padding:11px 16px; font-size:12.5px; font-weight:500; letter-spacing:.08em; color:var(--text-muted);}
+  .menu-signout{display:block; width:100%; text-align:left; background:none; border:0; border-left:3px solid transparent; border-radius:0; padding:11px 16px; font-size:14px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--text-muted);}
   .menu-signout:hover{color:var(--text); background:var(--surface-2);}
   /* What a role can't do (the server refuses it anyway). */
   body.view-only [data-needs="edit"], body.view-only [data-needs="unleashed"],

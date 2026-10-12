@@ -6,7 +6,7 @@
 <title>Production Schedule</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/styles.css">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-180.png">
@@ -62,7 +62,7 @@
   <div class="page-head">
     <div class="eyebrow">Mountain Falls · Production</div>
     <h1>Production Schedule</h1>
-    <div class="sub">Today's production, filled in as it happens — with batch stock checked against what's been sent to each line.</div>
+    <div class="sub help">Today's production, filled in as it happens — with batch stock checked against what's been sent to each line.</div>
   </div>
 
   <div class="sync-banner" id="syncBanner">
@@ -119,12 +119,12 @@
     <button type="button" class="btn-ghost btn-small" id="showAllBtn">Show all dates</button>
   </div>
 
-  <div class="export-note" id="reorderHint" style="margin-top:-8px;"></div>
+  <div class="export-note help" id="reorderHint" style="margin-top:-8px;"></div>
   <div class="job-list" id="jobList"></div>
 
   <div class="card card-pad" id="lineSheetSection" data-view-ok>
     <div class="section-title">Print line sheets</div>
-    <div class="export-note" style="margin:-4px 0 10px;">The day's schedule as the paper forms, one sheet per warehouse (UWH; LWH with AcquaBox): blank for the line to complete by hand, or filled in from what's been recorded in the app.</div>
+    <div class="export-note help" style="margin:-4px 0 10px;">The day's schedule as the paper forms, one sheet per warehouse (UWH; LWH with AcquaBox): blank for the line to complete by hand, or filled in from what's been recorded in the app.</div>
     <div class="filter-row">
       <div class="field">
         <label for="sheetDate">Production Date</label>

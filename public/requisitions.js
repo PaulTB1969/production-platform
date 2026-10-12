@@ -39,12 +39,11 @@ function requisitionIssues(r) {
 // ---------- loading ----------
 
 async function loadAll() {
-  const [bulk, reqs, balances, materials] = await Promise.all([
-    api('GET', '/stock/bulk'), api('GET', '/requisitions'), api('GET', '/stock/balances'), api('GET', '/stock/materials'),
+  const [bulk, reqs, materials] = await Promise.all([
+    api('GET', '/stock/bulk'), api('GET', '/requisitions'), api('GET', '/stock/materials'),
   ]);
   state.bulk = bulk;
   state.entries = Object.fromEntries(reqs.map((r) => [r.id, r]));
-  state.balances = balances;
   state.materials = Object.fromEntries(materials.map((m) => [m.sku, m]));
   document.getElementById('skuList').innerHTML = materials.map((m) =>
     '<option value="' + escapeHtml(m.sku) + '" label="' + escapeHtml(
@@ -196,14 +195,23 @@ function renderLine(id, l, idx, locked) {
   }
 }
 
+// Raw Material Balance is an enquiry: nothing shows until "Show balance",
+// for one line and/or raw material, or all.
 function renderBalanceList() {
   const el = document.getElementById('balanceList');
-  if (state.balances.length === 0) {
-    el.innerHTML = '<div class="empty-lines">No balances yet — they appear once a requisition with non-batch-tracked materials is completed.</div>';
+  if (!state.balanceShown) return;
+  const line = document.getElementById('balLine').value;
+  const q = document.getElementById('balSku').value.trim().toLowerCase();
+  const rows = state.balances.filter((b) => (!line || b.line === line) &&
+    (!q || b.sku.toLowerCase().includes(q) || (b.description || '').toLowerCase().includes(q)));
+  if (rows.length === 0) {
+    el.innerHTML = '<div class="empty-lines">' + (state.balances.length
+      ? 'No balances match.'
+      : 'No balances yet — they appear once a requisition with non-batch-tracked materials is completed.') + '</div>';
     return;
   }
   const byLine = {};
-  for (const b of state.balances) (byLine[b.line] ||= []).push(b);
+  for (const b of rows) (byLine[b.line] ||= []).push(b);
   const order = LINES.filter((l) => byLine[l]).concat(Object.keys(byLine).filter((l) => !LINES.includes(l)));
   el.innerHTML = order.map((line) =>
     '<div class="balance-group">' +
@@ -224,7 +232,7 @@ function renderBalanceList() {
 async function save(id, patch) {
   try {
     state.entries[id] = await api('PATCH', '/requisitions/' + encodeURIComponent(id), patch);
-    if ('status' in patch) state.balances = await api('GET', '/stock/balances');
+    if ('status' in patch && state.balanceShown) state.balances = await api('GET', '/stock/balances');
   } catch (err) {
     showError(err.message);
   }
@@ -498,3 +506,20 @@ setupFocus(
 renderSyncBanner();
 loadAll().catch((err) => showError('Could not load requisitions: ' + err.message));
 renderExportHistory().catch(() => {});
+
+async function showBalances(btn) {
+  await busy(btn, 'Loading…', async () => {
+    state.balances = await api('GET', '/stock/balances');
+    state.balanceShown = true;
+    document.getElementById('balanceList').hidden = false;
+    document.getElementById('hideBalanceBtn').hidden = false;
+    renderBalanceList();
+  });
+}
+document.getElementById('showBalanceBtn').addEventListener('click', (e) => showBalances(e.target));
+document.getElementById('balSku').addEventListener('keydown', (e) => { if (e.key === 'Enter') showBalances(document.getElementById('showBalanceBtn')); });
+document.getElementById('hideBalanceBtn').addEventListener('click', () => {
+  state.balanceShown = false;
+  document.getElementById('balanceList').hidden = true;
+  document.getElementById('hideBalanceBtn').hidden = true;
+});

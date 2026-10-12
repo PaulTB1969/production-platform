@@ -6,7 +6,7 @@
 <title>Raw Material Requisitions</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Tenor+Sans&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/styles.css">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-180.png">
@@ -34,7 +34,7 @@
   <div class="page-head">
     <div class="eyebrow">Mountain Falls · Production</div>
     <h1>Raw Material Requisitions</h1>
-    <div class="sub">Move raw materials from the Bulk Store to a production line, with batch numbers, ready for Unleashed.</div>
+    <div class="sub help">Move raw materials from the Bulk Store to a production line, with batch numbers, ready for Unleashed.</div>
   </div>
 
   <div class="sync-banner" id="syncBanner">
@@ -51,8 +51,8 @@
   </div>
 
   <div class="card card-pad" id="generateSection" data-needs="edit">
-    <div class="section-title">Generate Requisitions</div>
-    <div class="export-note" style="margin-top:-4px;">Creates one requisition per line from the Production Schedule's still-scheduled jobs for a date — jobs already in progress or completed are left out, and a line that already has a requisition for that date is left alone rather than overwritten. Raw materials that aren't batch-tracked are reduced by what's already at the line.</div>
+    <div class="section-title">Generate Stock Requisitions</div>
+    <div class="export-note help" style="margin-top:-4px;">Creates one requisition per line from the Production Schedule's still-scheduled jobs for a date — jobs already in progress or completed are left out, and a line that already has a requisition for that date is left alone rather than overwritten. Raw materials that aren't batch-tracked are reduced by what's already at the line.</div>
     <div class="filter-row" style="margin-top:10px;">
       <div class="field">
         <label for="genDate">Date</label>
@@ -63,7 +63,7 @@
     <div class="export-note" id="genStatusNote" style="margin-top:8px;"></div>
 
     <div class="section-title" style="margin-top:18px;">Create a requisition</div>
-    <div class="export-note" style="margin-top:-4px;">An empty requisition for one line, to fill in by hand. Use it for a top-up or anything not on the schedule. A line that already has a requisition for the date gets the next number, e.g. "(2)".</div>
+    <div class="export-note help" style="margin-top:-4px;">An empty requisition for one line, to fill in by hand. Use it for a top-up or anything not on the schedule. A line that already has a requisition for the date gets the next number, e.g. "(2)".</div>
     <div class="filter-row" style="margin-top:10px;">
       <div class="field">
         <label for="createDate">Date</label>
@@ -132,8 +132,25 @@
 
   <div class="card card-pad" id="balanceSection" data-view-ok>
     <div class="section-title">Raw Material Balance</div>
-    <div class="export-note" style="margin-top:-4px;">For raw materials that aren't batch-tracked in Unleashed: how much has been sent to each line by completed requisitions, versus how much the Production Schedule has recorded as used (including wastage). Always current — the balance carries forward into the next requisition.</div>
-    <div id="balanceList" style="margin-top:12px;"></div>
+    <div class="export-note help" style="margin-top:-4px;">For raw materials that aren't batch-tracked in Unleashed: how much has been sent to each line by completed requisitions, versus how much the Production Schedule has recorded as used (including wastage). Always current — the balance carries forward into the next requisition.</div>
+    <div class="filter-row" style="margin-top:8px;">
+      <div class="field">
+        <label for="balLine">Line</label>
+        <select id="balLine">
+          <option value="">All lines</option>
+          <option value="PRD - UWH">PRD - UWH — Upper Warehouse</option>
+          <option value="PRD - LWH">PRD - LWH — Lower Warehouse</option>
+          <option value="PRD - AQB">PRD - AQB — AcquaBoxe</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="balSku">Raw material</label>
+        <input id="balSku" type="text" list="skuList" placeholder="all, or type a code or name" autocomplete="off">
+      </div>
+      <button type="button" class="btn-primary btn-small" id="showBalanceBtn">Show balance</button>
+      <button type="button" class="btn-ghost btn-small" id="hideBalanceBtn" hidden>Hide</button>
+    </div>
+    <div id="balanceList" style="margin-top:12px;" hidden></div>
   </div>
 </div>
 <datalist id="skuList"></datalist>
