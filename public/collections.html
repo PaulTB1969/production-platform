@@ -47,15 +47,22 @@
   table.sheet .rm{background:none; border:0; color:var(--text-faint); padding:2px 6px; font-size:14px; text-transform:none;}
   table.sheet .rm:hover{color:var(--danger);}
   .sheet-foot{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:16px; padding-top:14px; border-top:1px solid var(--border);}
+  .sheet-buttons{display:contents;}
   .sheet-foot .status{flex:1 1 220px; font-size:13px; color:var(--text-muted);}
   .add-row{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
   .add-row input[type=text]{flex:1 1 240px;}
   .add-row input[type=number]{flex:0 1 110px;}
   @media print{
-    .topnav, .sync-banner, #uploadSection, .tabs, .sheet-foot, .add-row, #arrivalSection, .page-head .sub, .no-print, .rm{display:none !important;}
+    .topnav, .sync-banner, #uploadSection, #vehiclesSection, .tabs, .sheet-foot, .add-row, #arrivalSection, .page-head .sub, .no-print, .rm{display:none !important;}
     body{background:#fff; padding:0;} .card{border:0; box-shadow:none; padding:0;}
     table.sheet input{border:0; padding:0; background:none;}
   }
+  td.interim{font-size:13px; white-space:nowrap; color:var(--text-muted);}
+  td.interim small{display:block; font-size:11px; color:var(--text-faint);}
+  td.interim.carried{color:var(--text); font-weight:500;}
+  .carry{display:inline-flex; align-items:center; gap:5px; margin-left:8px; font-size:12px; text-transform:none; letter-spacing:0; font-weight:500; color:var(--text);}
+  .carry input{width:auto;}
+  body.no-approve #vehiclesSection{display:none !important;}
 </style>
 </head>
 <body>
@@ -107,6 +114,17 @@
     </div>
     <div class="export-note">Columns: Date, Destination, SKU, Quantity — one row per SKU. Destination is a warehouse code (CPT, RML-JHB, ZARMI-JHB, PE, DBN…); "Digistics (Wed Collection)" goes into CPT. Uploading again updates the Qty Req of SKUs already on the list.</div>
     <div class="export-note" id="uploadStatus" hidden></div>
+  </div>
+
+  <div class="card card-pad" id="vehiclesSection" data-needs="edit">
+    <div class="section-title">Vehicles</div>
+    <div class="export-note" style="margin:-4px 0 10px;">Each truck has its own sheet. A truck that's switched off isn't offered on new days. The interim transfer is built in.</div>
+    <div id="vehicleList"></div>
+    <div class="add-row" style="margin-top:10px;">
+      <input type="text" id="newVehicleCode" placeholder="Code, e.g. TRK3" maxlength="12" autocomplete="off" style="flex:0 1 140px; text-transform:uppercase;">
+      <input type="text" id="newVehicleName" placeholder="Name, e.g. Hired 8-ton" autocomplete="off">
+      <button type="button" class="btn-ghost btn-small" id="addVehicleBtn">Add truck</button>
+    </div>
   </div>
 
   <div class="card card-pad" id="arrivalSection">

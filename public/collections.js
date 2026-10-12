@@ -1,8 +1,10 @@
 // Stock Collection screen, laid out like the paper sheets: the day's LIST
-// (sections with SKU + Qty Req), and one SHEET per truck where the
-// warehouse fills in Qty Trf and Batch for what went on that truck. Mark
-// Loaded, then Approve (send or CSV) -> one transfer per section. The
-// second leg HLD -> destination is one transfer per destination.
+// (sections with SKU + Qty Req), and one SHEET per vehicle where the
+// warehouse fills in Qty Trf and Batch. Trucks: Mark Loaded, then Approve
+// (send or CSV) -> one transfer per section; the second leg HLD ->
+// destination is one transfer per destination. Interim transfer: approved
+// straight away, PRD -> destination; the stock is then shown on the truck
+// that carries it, which doesn't transfer it again.
 //
 // Inputs save as you go without redrawing the table, so Tab moves straight
 // from Qty Trf to Batch to the next row.
@@ -14,7 +16,6 @@ const DESTINATIONS = [
   ['CPT', 'Cape Town'], ['RML-JHB', 'RM Logistics JHB'], ['ZARMI-JHB', 'Johannesburg - Zarmi'],
   ['PE', 'Port Elizabeth'], ['DBN', 'Durban'], ['JBAY', "Jeffery's Bay"], ['HER', 'Hermanus Sales'], ['PND', 'Pending Warehouse Orders'],
 ];
-const TRUCKS = ['RML', 'MFE'];
 const SHEET_TEXT = { open: 'Being loaded', loaded: 'Loaded — waiting for approval', approved: 'Approved' };
 
 const state = { date: null, tab: 'list', day: null, stock: { products: [], batches: {} } };
@@ -23,7 +24,14 @@ const sheetStatus = (s) => (s?.approvedAt ? 'approved' : s?.loadedAt ? 'loaded' 
 const sheetOf = (truck) => state.day.sheets.find((s) => s.truck === truck);
 const loadOf = (line, truck) => line.loads.find((x) => x.truck === truck);
 const loadedTotal = (line) => line.loads.reduce((s, x) => s + (Number(x.qty) || 0), 0);
-const toFirst = (c) => (c.viaHolding ? 'HLD' : c.warehouse);
+const toFirst = (c, kind) => (kind !== 'interim' && c.viaHolding ? 'HLD' : c.warehouse);
+// The day's vehicles: trucks in order, then the interim transfer.
+const vehicles = () => state.day?.vehicles || [];
+const vehicleOf = (code) => vehicles().find((v) => v.code === code);
+const isInterim = (code) => vehicleOf(code)?.kind === 'interim';
+const trucks = () => vehicles().filter((v) => v.kind === 'truck');
+const interimCode = () => vehicles().find((v) => v.kind === 'interim')?.code;
+const interimLoad = (line) => line.loads.find((x) => isInterim(x.truck) && Number(x.qty) > 0);
 
 // ---------- loading ----------
 
@@ -50,17 +58,23 @@ function render() {
 
 function renderTabs() {
   const chip = (t) => {
+    if (isInterim(t)) {
+      const sent = state.day.collections.reduce((n, c) => n + c.dispatches.filter((d) => d.truck === t && d.exportedAt).length, 0);
+      return sent ? '<span class="chip approved">' + sent + ' sent</span>' : '';
+    }
     const s = sheetStatus(sheetOf(t));
     return s === 'open' ? '' : '<span class="chip ' + s + '">' + (s === 'approved' ? 'approved' : 'loaded') + '</span>';
   };
+  if (state.tab !== 'list' && !vehicleOf(state.tab)) state.tab = 'list';
   document.getElementById('tabs').innerHTML =
     '<button type="button" role="tab" data-tab="list" aria-selected="' + (state.tab === 'list') + '">List</button>' +
-    TRUCKS.map((t) => '<button type="button" role="tab" data-tab="' + t + '" aria-selected="' + (state.tab === t) + '">' + t + ' sheet' + chip(t) + '</button>').join('');
+    vehicles().map((v) => '<button type="button" role="tab" data-tab="' + escapeHtml(v.code) + '" aria-selected="' + (state.tab === v.code) + '">' +
+      escapeHtml(v.kind === 'interim' ? v.name : v.name + ' sheet') + chip(v.code) + '</button>').join('');
 }
 
-function sectionTitle(c) {
+function sectionTitle(c, kind) {
   return 'Stock Collection ' + escapeHtml(c.destination) +
-    ' <span style="font-weight:400;color:var(--text-faint);">· ' + escapeHtml(c.label) + ' · to ' + escapeHtml(toFirst(c)) + '</span>';
+    ' <span style="font-weight:400;color:var(--text-faint);">· ' + escapeHtml(c.label) + ' · to ' + escapeHtml(toFirst(c, kind)) + '</span>';
 }
 
 // The list: Qty Req per SKU, what each truck took, what's left.
@@ -70,14 +84,14 @@ function renderList() {
   for (const c of cs) {
     out += '<div class="sheet-section"><table class="sheet"><thead><tr>' +
       '<th class="title">' + sectionTitle(c) + '</th><th class="num">Qty Req</th>' +
-      TRUCKS.map((t) => '<th class="num">' + t + '</th>').join('') + '<th class="num">Left</th><th></th></tr></thead><tbody>' +
+      vehicles().map((v) => '<th class="num">' + escapeHtml(v.kind === 'interim' ? 'Interim' : v.name) + '</th>').join('') + '<th class="num">Left</th><th></th></tr></thead><tbody>' +
       c.lines.map((l) => {
         const left = l.qty - loadedTotal(l);
         const locked = l.loads.some((x) => x.dispatchId);
         return '<tr data-line="' + l.id + '">' +
           '<td class="sku">' + escapeHtml(l.sku) + (l.description && l.description !== l.sku ? '<small>' + escapeHtml(l.description) + '</small>' : '') + '</td>' +
           '<td class="num"><input class="qty" type="number" min="1" step="1" data-req="' + l.id + '" value="' + l.qty + '"></td>' +
-          TRUCKS.map((t) => { const x = loadOf(l, t); return '<td class="num">' + (x && x.qty ? fmtNum(x.qty) : '') + '</td>'; }).join('') +
+          vehicles().map((v) => { const x = loadOf(l, v.code); return '<td class="num">' + (x && x.qty ? fmtNum(x.qty) : '') + '</td>'; }).join('') +
           '<td class="num" style="' + (left > 0 ? 'color:var(--warn);' : left < 0 ? 'color:var(--danger);' : 'color:var(--good);') + '">' + (left === 0 ? '✓' : fmtNum(left)) + '</td>' +
           '<td>' + (locked ? '' : '<button type="button" class="rm" data-rm-line="' + l.id + '" title="Remove">✕</button>') + '</td></tr>';
       }).join('') +
@@ -134,14 +148,28 @@ function allocated(sku, batch, exceptLoadId) {
 }
 
 
+// Interim stock on a truck sheet: already transferred; tick it if this
+// truck carries it (another truck's tick shows its name).
+function interimCell(l, truck, status) {
+  const i = interimLoad(l);
+  if (!i) return '<td class="interim"></td>';
+  const text = fmtNum(i.qty) + (i.batch ? ' · ' + escapeHtml(i.batch) : '');
+  if (i.carriedBy && i.carriedBy !== truck) return '<td class="interim">' + text + '<small>on ' + escapeHtml(vehicleOf(i.carriedBy)?.name || i.carriedBy) + '</small></td>';
+  const box = status === 'approved' ? (i.carriedBy === truck ? ' ✓ on this truck' : '')
+    : '<label class="carry no-print"><input type="checkbox" data-carry="' + l.id + '"' + (i.carriedBy === truck ? ' checked' : '') + '> on this truck</label>';
+  return '<td class="interim' + (i.carriedBy === truck ? ' carried' : '') + '">' + text + box + '</td>';
+}
+
 function truckRow(c, l, truck, status) {
-  const other = TRUCKS.find((t) => t !== truck);
+  const interim = isInterim(truck);
   const x = loadOf(l, truck);
-  const o = loadOf(l, other);
-  const locked = status === 'approved' || !!x?.dispatchId;
+  // "Other": the other trucks (on a truck sheet), or all trucks (on the interim sheet).
+  const others = l.loads.filter((y) => y.truck !== truck && !isInterim(y.truck)).reduce((s, y) => s + (Number(y.qty) || 0), 0);
+  const o = others ? { qty: others } : null;
+  const locked = (!interim && status === 'approved') || !!x?.dispatchId;
   const entries = entriesOf(x);
   const multi = entries.length > 1;
-  const diff = x && x.qty && x.qty !== l.qty - (o?.qty || 0) && loadedTotal(l) !== l.qty;
+  const diff = x && x.qty && loadedTotal(l) !== l.qty;
   const qtyCell = locked
     ? '<td class="num trf">' + (x?.qty ? fmtNum(x.qty) : '') + '</td>'
     : '<td class="num trf"><input class="qty" type="number" min="0" step="1" data-trf="' + l.id + '" value="' + (x?.qty ?? '') + '"' +
@@ -162,6 +190,7 @@ function truckRow(c, l, truck, status) {
   }
   return '<tr class="' + (locked ? 'locked' : '') + (diff ? ' diff' : '') + '" data-line="' + l.id + '" data-coll="' + c.id + '">' +
     '<td class="sku">' + escapeHtml(l.sku) + '</td><td class="num">' + fmtNum(l.qty) + '</td>' + qtyCell + batchCell +
+    (interim || !interimCode() ? '' : interimCell(l, truck, status)) +
     '<td class="num other">' + (o?.qty ? fmtNum(o.qty) : '') + '</td></tr>';
 }
 
@@ -171,21 +200,27 @@ function renderTruck(truck) {
   const status = sheetStatus(s);
   const cs = state.day.collections;
   if (!cs.length) return '<div class="empty">No collection list for this date yet.</div>';
-  const other = TRUCKS.find((t) => t !== truck);
-  let out = '';
+  const v = vehicleOf(truck);
+  const interim = v.kind === 'interim';
+  const otherHead = interim ? 'Trucks' : trucks().length > 2 ? 'Other trucks' : (trucks().find((t) => t.code !== truck)?.name || 'Other');
+  let out = interim
+    ? '<div class="export-note" style="margin:0 0 10px;">Moves stock in Unleashed straight from PRD to the destination, ahead of delivery, so the order team there can work with it. It still goes on a truck later: tick it on that truck\'s sheet (it isn\'t transferred again).</div>'
+    : '';
   for (const c of cs) {
     out += '<div class="sheet-section"><table class="sheet"><thead><tr>' +
-      '<th class="title">' + sectionTitle(c) + '</th><th class="num">Qty Req</th><th class="num">Qty Trf</th><th>Batch</th><th class="num">' + other + '</th></tr></thead><tbody>' +
+      '<th class="title">' + sectionTitle(c, v.kind) + '</th><th class="num">Qty Req</th><th class="num">Qty Trf</th><th>Batch</th>' +
+      (interim || !interimCode() ? '' : '<th>Interim (already transferred)</th>') +
+      '<th class="num">' + escapeHtml(otherHead) + '</th></tr></thead><tbody>' +
       c.lines.map((l) => truckRow(c, l, truck, status)).join('') + '</tbody></table>';
     const ds = c.dispatches.filter((d) => d.truck === truck);
     if (ds.length) {
       out += '<div class="export-note">' + ds.map((d) => d.exportedAt
-        ? (d.guid ? 'Sent' : 'Exported by CSV') + ' as <b>' + escapeHtml(d.transferNumber || '') + '</b> (PRD → ' + escapeHtml(toFirst(c)) + ') ' + escapeHtml(fmtTimestamp(d.exportedAt))
+        ? (d.guid ? 'Sent' : 'Exported by CSV') + ' as <b>' + escapeHtml(d.transferNumber || '') + '</b> (PRD → ' + escapeHtml(toFirst(c, v.kind)) + ') ' + escapeHtml(fmtTimestamp(d.exportedAt))
         : '<span style="color:var(--danger);">Not in Unleashed yet' + (d.sendError ? ': ' + escapeHtml(d.sendError) : '') + '</span>').join(' · ') + '</div>';
     }
     out += '</div>';
   }
-  out += '<div class="sheet-foot"><div class="status" id="sheetStatus">' + statusLine(truck) + '</div>' + sheetButtons(truck, status) + '</div>';
+  out += '<div class="sheet-foot"><div class="status" id="sheetStatus">' + statusLine(truck) + '</div><span class="sheet-buttons" id="sheetButtons">' + sheetButtons(truck, status) + '</span></div>';
   return out;
 }
 
@@ -194,7 +229,15 @@ function statusLine(truck) {
   const status = sheetStatus(s);
   const lines = state.day.collections.flatMap((c) => c.lines.map((l) => ({ c, l, x: loadOf(l, truck) }))).filter((r) => r.x && r.x.qty > 0);
   const missing = lines.filter((r) => r.l.needsBatch && !String(r.x.batch || '').trim());
-  let t = '<b>' + SHEET_TEXT[status] + '</b> · ' + lines.length + ' SKU line(s), ' + fmtNum(lines.reduce((u, r) => u + Number(r.x.qty), 0)) + ' units on ' + truck;
+  if (isInterim(truck)) {
+    const waiting = lines.filter((r) => !r.x.dispatchId);
+    let t = '<b>' + fmtNum(lines.length - waiting.length) + ' line(s) transferred</b> · ' + fmtNum(waiting.length) + ' waiting to be approved';
+    if (missing.length) t += '<br><span style="color:var(--warn);">Batch still needed: ' + escapeHtml(missing.map((r) => r.c.destination + ' ' + r.l.sku).join(', ')) + '</span>';
+    return t;
+  }
+  const carried = state.day.collections.flatMap((c) => c.lines.map((l) => interimLoad(l))).filter((i) => i && i.carriedBy === truck);
+  let t = '<b>' + SHEET_TEXT[status] + '</b> · ' + lines.length + ' SKU line(s), ' + fmtNum(lines.reduce((u, r) => u + Number(r.x.qty), 0)) + ' units on ' + escapeHtml(vehicleOf(truck)?.name || truck) +
+    (carried.length ? ' · plus ' + carried.length + ' interim line(s), ' + fmtNum(carried.reduce((u, i) => u + Number(i.qty), 0)) + ' units (already transferred)' : '');
   if (status === 'loaded') t += ' · marked loaded ' + escapeHtml(fmtTimestamp(s.loadedAt));
   if (status === 'approved') t += ' · approved ' + escapeHtml(fmtTimestamp(s.approvedAt));
   if (missing.length && status === 'open') t += '<br><span style="color:var(--warn);">Batch still needed: ' + escapeHtml(missing.map((r) => r.c.destination + ' ' + r.l.sku).join(', ')) + '</span>';
@@ -204,7 +247,13 @@ function statusLine(truck) {
 function sheetButtons(truck, status) {
   const csvApproved = state.day.collections.some((c) => c.dispatches.some((d) => d.truck === truck && d.exportedAt && !d.guid));
   const unsent = state.day.collections.some((c) => c.dispatches.some((d) => d.truck === truck && !d.exportedAt));
-  if (status === 'open') return '<button type="button" class="btn-primary btn-small" data-loaded="' + truck + '">Mark ' + truck + ' loaded</button>';
+  if (isInterim(truck)) {
+    const waiting = state.day.collections.some((c) => c.lines.some((l) => { const x = loadOf(l, truck); return x && Number(x.qty) > 0 && !x.dispatchId; }));
+    return (waiting || unsent ? '<button type="button" class="btn-primary btn-small" data-approve="' + truck + '">Approve &amp; send to Unleashed</button>' +
+      (unsent ? '' : '<button type="button" class="btn-ghost btn-small" data-approve-csv="' + truck + '">Approve by CSV</button>') : '') +
+      (csvApproved ? '<button type="button" class="btn-ghost btn-small" data-undo-csv="' + truck + '" title="Only if the CSV was not uploaded to Unleashed">Undo CSV approval</button>' : '');
+  }
+  if (status === 'open') return '<button type="button" class="btn-primary btn-small" data-loaded="' + truck + '">Mark ' + escapeHtml(vehicleOf(truck)?.name || truck) + ' loaded</button>';
   if (status === 'loaded') {
     return '<button type="button" class="btn-ghost btn-small" data-unloaded="' + truck + '">Back to loading</button>' +
       '<button type="button" class="btn-primary btn-small" data-approve="' + truck + '">Approve &amp; send to Unleashed</button>' +
@@ -239,6 +288,8 @@ async function saveLoad(lineId, { qty, batch }, refocus) {
   if (c && row) row.outerHTML = truckRow(c, l, truck, sheetStatus(sheetOf(truck)));
   const st = document.getElementById('sheetStatus');
   if (st) st.innerHTML = statusLine(truck);
+  const sb = document.getElementById('sheetButtons');
+  if (sb) sb.innerHTML = sheetButtons(truck, sheetStatus(sheetOf(truck)));
   if (refocus) sheetEl.querySelector('tr[data-line="' + lineId + '"] ' + refocus)?.focus();
 }
 
@@ -257,7 +308,7 @@ async function pickBatches(lineId) {
   const { l } = findLine(lineId);
   const truck = state.tab;
   const x = loadOf(l, truck);
-  const o = loadOf(l, TRUCKS.find((t) => t !== truck));
+  const elsewhere = loadedTotal(l) - (Number(x?.qty) || 0);
   const entries = entriesOf(x).map((e) => ({ batchNumber: e.batch, qty: e.qty ?? x?.qty ?? 0 }));
   const batches = (state.stock.batches[l.sku] || []).map((b) => ({
     batchNumber: b.batchNumber,
@@ -267,8 +318,8 @@ async function pickBatches(lineId) {
   }));
   const picked = await openBatchDialog({
     title: l.sku,
-    subtitle: (l.description || '') + ' · ' + truck,
-    required: x?.qty || Math.max(0, l.qty - (o?.qty || 0)),
+    subtitle: (l.description || '') + ' · ' + (vehicleOf(truck)?.name || truck),
+    required: x?.qty || Math.max(0, l.qty - elsewhere),
     batches,
     selected: entries,
     allowOther: true,
@@ -290,6 +341,13 @@ function removeBatch(lineId, i) {
 }
 
 sheetEl.addEventListener('change', async (e) => {
+  const carry = e.target.closest('[data-carry]');
+  if (carry) {
+    try { replaceCollection(await api('PUT', '/collections/lines/' + carry.dataset.carry + '/carried-by', { truck: carry.checked ? state.tab : null })); }
+    catch (err) { showError(err.message); }
+    render();
+    return;
+  }
   const trf = e.target.closest('[data-trf]');
   if (trf) { if (!trf.readOnly) saveQty(trf); return; }
   const pick = e.target.closest('.bpick');
@@ -388,7 +446,7 @@ sheetEl.addEventListener('click', async (e) => {
   if (csv) {
     busy(csv, 'Exporting…', async () => {
       const exp = await api('POST', '/collections/sheets/' + csv.dataset.approveCsv + '/csv', { date });
-      download(exp.url);
+      if (exp.url && exp.id) download(exp.url); // none when only interim stock was on it
       await loadDay(); await renderArrivals();
     });
     return;
@@ -483,3 +541,37 @@ setupFocus({}, {}, []);
 renderSyncBanner();
 loadDay().catch((err) => showError('Could not load the collection: ' + err.message));
 renderArrivals().catch(() => {});
+
+// ---------- vehicles ----------
+// Trucks can be added, renamed and switched off; the interim transfer is built in.
+
+async function renderVehicles() {
+  const el = document.getElementById('vehicleList');
+  if (!el) return;
+  const list = await api('GET', '/collections/vehicles');
+  el.innerHTML = '<table class="sheet"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>In use</th></tr></thead><tbody>' +
+    list.map((v) => '<tr data-vehicle="' + escapeHtml(v.code) + '"><td class="sku">' + escapeHtml(v.code) + '</td>' +
+      '<td><input type="text" data-vname value="' + escapeHtml(v.name) + '"></td>' +
+      '<td>' + (v.kind === 'interim' ? 'Interim transfer (PRD → destination)' : 'Truck') + '</td>' +
+      '<td><label class="carry"><input type="checkbox" data-vactive' + (v.active ? ' checked' : '') + '> on</label></td></tr>').join('') +
+    '</tbody></table>';
+}
+
+document.getElementById('vehicleList').addEventListener('change', async (e) => {
+  const row = e.target.closest('[data-vehicle]');
+  if (!row) return;
+  const body = e.target.matches('[data-vname]') ? { name: e.target.value } : { active: e.target.checked };
+  try { await api('PATCH', '/collections/vehicles/' + encodeURIComponent(row.dataset.vehicle), body); await loadDay(); }
+  catch (err) { showError(err.message); }
+  await renderVehicles();
+});
+
+document.getElementById('addVehicleBtn').addEventListener('click', (e) => busy(e.target, 'Adding…', async () => {
+  await api('POST', '/collections/vehicles', { code: document.getElementById('newVehicleCode').value, name: document.getElementById('newVehicleName').value });
+  document.getElementById('newVehicleCode').value = '';
+  document.getElementById('newVehicleName').value = '';
+  await renderVehicles();
+  await loadDay();
+}));
+
+renderVehicles().catch(() => {});

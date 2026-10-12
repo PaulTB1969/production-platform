@@ -179,8 +179,16 @@ export function apiRouter({ db, platformDb, config, unleashed }) {
     res.json({ results: await sendTruck(db, unleashed(), requireDate(req.body?.date), req.params.truck, sentBy(req)) }));
   r.post('/collections/sheets/:truck/csv', async (req, res) => {
     const e = await coll.approveTruckCsv(db, requireDate(req.body?.date), req.params.truck);
+    if (!e) return res.json({ approved: true }); // only interim stock on it: nothing to transfer
     res.status(201).json({ ...e, url: `/api/exports/${e.id}` });
   });
+  // Vehicles: trucks can be added, renamed and switched off; Interim is built in.
+  r.get('/collections/vehicles', async (req, res) => res.json(await coll.listVehicles(db)));
+  r.post('/collections/vehicles', async (req, res) => res.status(201).json(await coll.createVehicle(db, req.body || {})));
+  r.patch('/collections/vehicles/:code', async (req, res) => res.json(await coll.updateVehicle(db, req.params.code, req.body || {})));
+  // Which truck physically carries a line's interim stock.
+  r.put('/collections/lines/:lineId/carried-by', async (req, res) =>
+    res.json(await coll.setCarriedBy(db, Number(req.params.lineId), req.body?.truck || null)));
   r.post('/collections/sheets/:truck/undo-csv', async (req, res) => res.json(await coll.undoTruckCsv(db, requireDate(req.body?.date), req.params.truck)));
   // Second leg, per destination.
   r.post('/collections/:id/arrival/send', async (req, res) => res.json(await sendArrival(db, unleashed(), req.params.id, sentBy(req))));

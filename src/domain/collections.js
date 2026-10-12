@@ -3,11 +3,17 @@
 // The day's LIST: sections (collections, one per destination) with lines
 //   { id, sku, description, qty (= Qty Req), needsBatch,
 //     loads: [{ id, truck, qty (= Qty Trf), batch, dispatchId, arrivalId }] }.
-// One TRUCK SHEET per truck per day: Qty Trf and Batch per line for that
-// truck. Loaded -> Approved; approval makes one transfer per section on
-// the truck (PRD -> CPT for Cape Town, PRD -> HLD for the rest).
-// The second leg, HLD -> destination, is one transfer per destination
-// covering every truck's loads.
+// One SHEET per vehicle per day: Qty Trf and Batch per line for that
+// vehicle. Vehicles (table "vehicles") are trucks — RML, MFE and any added
+// — and the Interim transfer.
+//   Truck: Loaded -> Approved; approval makes one transfer per section
+//   (PRD -> CPT for Cape Town, PRD -> HLD for the rest). The second leg,
+//   HLD -> destination, is one transfer per destination covering every
+//   truck's loads.
+//   Interim: approved straight away, PRD -> the destination itself, so the
+//   order team there can work with the stock before it arrives. It still
+//   travels on a truck later (the load's carried_by); that truck's sheet
+//   shows it to load but doesn't transfer it again.
 
 import { csvField, csvTextGuard, csvDocument, parseCsv, parseFlexibleDate } from './csv.js';
 import { BULK_STORE } from './lines.js';
@@ -26,7 +32,6 @@ export const DESTINATIONS = [
 ];
 export const DESTINATION_LABELS = Object.fromEntries(DESTINATIONS.map((d) => [d.code, d.label]));
 const WAREHOUSE = Object.fromEntries(DESTINATIONS.map((d) => [d.code, d.warehouse]));
-export const TRUCKS = ['RML', 'MFE'];
 export const HOLDING = 'HLD';
 
 export const warehouseOf = (destination) => WAREHOUSE[destination] || destination;
@@ -34,6 +39,9 @@ export const warehouseOf = (destination) => WAREHOUSE[destination] || destinatio
 export const needsHoldingLeg = (destination) => warehouseOf(destination) !== 'CPT';
 // First leg's destination warehouse.
 export const firstLegTo = (destination) => (needsHoldingLeg(destination) ? HOLDING : warehouseOf(destination));
+// Where a vehicle's approval transfers to: an interim transfer goes straight
+// to the destination; a truck to its first leg.
+export const legTo = (destination, kind) => (kind === 'interim' ? warehouseOf(destination) : firstLegTo(destination));
 
 export const sectionLabel = (destination) => DESTINATION_LABELS[destination] || destination;
 
@@ -55,8 +63,15 @@ export function normalizeDestination(v) {
 }
 
 // Transfer Comments, e.g. "ZARMI-JHB — Johannesburg - Zarmi (RML)".
-export const legName = (destination, truck) =>
-  `${destination} — ${sectionLabel(destination)}${truck ? ` (${truck})` : ''}`;
+export const legName = (destination, vehicle) =>
+  `${destination} — ${sectionLabel(destination)}${vehicle ? ` (${vehicle})` : ''}`;
+
+// Vehicle codes: short, capitals and digits (they go on loads and transfers).
+export function cleanVehicleCode(v) {
+  const c = String(v || '').trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9-]{0,11}$/.test(c)) return null;
+  return c;
+}
 
 // A load needs a batch only for a finished good Unleashed batch-tracks.
 export const loadMissingBatch = (line, load) => Number(load.qty) > 0 && line.needsBatch && !String(load.batch || '').trim();

@@ -14,7 +14,7 @@ import { getRecipe } from './stock.js';
 import { computeEntryStatus } from '../domain/schedule.js';
 import { transferPayload, assemblyPayload, trackingPayload, hasTag } from '../domain/unleashedPayloads.js';
 import { prepareApproval, markApprovedIfDone, prepareArrival } from './collections.js';
-import { BULK_STORE, HOLDING, firstLegTo, warehouseOf, legName, legPayload } from '../domain/collections.js';
+import { BULK_STORE, HOLDING, warehouseOf, legName, legPayload } from '../domain/collections.js';
 
 // 4xx = Unleashed refused it, so nothing was created and it's safe to retry
 // as new. Anything else (no reply, 5xx) leaves the outcome unknown.
@@ -220,16 +220,16 @@ async function sendLeg(db, client, { table, id, startedAt, tag, payload, numberC
 // "Approve & send RML".
 export async function sendTruck(db, client, date, truck, { sentBy } = {}) {
   requireClient(client);
-  const pending = await prepareApproval(db, date, truck);
+  const { pending } = await prepareApproval(db, date, truck);
   const results = [];
-  for (const { collection: c, dispatch: d, items } of pending) {
+  for (const { collection: c, dispatch: d, items, to, comments } of pending) {
     try {
       const r = await sendLeg(db, client, {
         table: 'collection_dispatches', id: d.id, startedAt: d.sendStartedAt, tag: `cd${d.id}`,
-        payload: signed(legPayload({ from: BULK_STORE, to: firstLegTo(c.destination), comments: legName(c.destination, truck), items, tag: `cd${d.id}` }), sentBy),
+        payload: signed(legPayload({ from: BULK_STORE, to, comments, items, tag: `cd${d.id}` }), sentBy),
         numberCols: { started: 'dispatch_send_started_at', guid: 'dispatch_guid', exported: 'dispatch_exported_at' },
       });
-      results.push({ ok: true, destination: c.destination, truck, to: firstLegTo(c.destination), ...r });
+      results.push({ ok: true, destination: c.destination, truck, to, ...r });
     } catch (err) {
       results.push({ ok: false, destination: c.destination, truck, error: err.message });
     }

@@ -138,7 +138,7 @@ test('7 Oct: list -> two truck sheets -> 6 transfers -> 2 second legs', async ()
   assert.equal(u.store[0].TransferDetails.find((x) => x.Product.ProductCode === 'P330ST_TIMEOUT_ZP').TransferQuantity, 84);
 
   day = await coll.collectionDay(db, D);
-  assert.deepEqual(day.sheets.map((s) => [s.truck, sheetStatus(s)]), [['RML', 'approved'], ['MFE', 'approved']]);
+  assert.deepEqual(day.sheets.map((s) => [s.truck, sheetStatus(s)]), [['RML', 'approved'], ['MFE', 'approved'], ['INTERIM', 'open']]);
 
   // Second leg: one per destination, both trucks together.
   const pending = await coll.pendingArrivals(db);
@@ -231,4 +231,67 @@ test('several batches on one line: quantities must add up to Qty Trf', async () 
     /The batch quantities add up to 70, but Qty Trf is 80\./);
   const c = await coll.setLoad(db, line.id, 'MFE', { qty: 80, batch: '20261007 UWH 1 (30) 20261001 LWH 1 (50)' });
   assert.equal(c.lines.find((l) => l.sku === 'P1.0SP_MFSIG_PN').loads[0].batch, '20261007 UWH 1 (30) 20261001 LWH 1 (50)');
+});
+
+test('interim transfer: PRD straight to the destination, no second leg; the truck carries it without transferring again', async () => {
+  await loadList();
+  const u = fakeUnleashed();
+  // Zarmi stock moved early so the order team can invoice it; RML-JHB goes on RML as normal.
+  await fillSheet('INTERIM', [['ZARMI-JHB', 'P500ST_MFSIG_PN', 72, '20261007'], ['ZARMI-JHB', 'P500SP_MFSIG_PN', 144, '20261007']]);
+  await assert.rejects(coll.setLoaded(db, D, 'INTERIM', true), /no Loaded step/);
+  const results = await sendTruck(db, u, D, 'INTERIM'); // no Loaded step needed
+  assert.deepEqual(results.map((r) => [r.destination, r.to]), [['ZARMI-JHB', 'ZARMI-JHB']]);
+  assert.deepEqual(u.store.map((t) => `${route(t)} ${t.Comments.replace(/ \[PH.*$/, '')}`),
+    ['PRD->ZARMI-JHB ZARMI-JHB — Johannesburg - Zarmi (Interim transfer)']);
+
+  // RML physically carries the interim stock plus its own load.
+  let day = await coll.collectionDay(db, D);
+  const zarmi = day.collections.find((c) => c.destination === 'ZARMI-JHB');
+  for (const l of zarmi.lines.filter((x) => x.loads.some((y) => y.truck === 'INTERIM'))) await coll.setCarriedBy(db, l.id, 'RML');
+  await assert.rejects(coll.setCarriedBy(db, zarmi.lines[0].id, 'INTERIM'), /Pick a truck/);
+  await fillSheet('RML', [['RML-JHB', 'P330ST_MFSIG_PN', 84, '20261007']]);
+  await coll.setLoaded(db, D, 'RML', true);
+  await sendTruck(db, u, D, 'RML');
+  // Only RML's own load is transferred (to HLD), not the interim stock again.
+  assert.deepEqual(u.store.slice(1).map((t) => [route(t), t.TransferDetails.map((x) => x.Product.ProductCode)]),
+    [['PRD->HLD', ['P330ST_MFSIG_PN']]]);
+
+  // Second leg: RML-JHB only; Zarmi's stock is already there.
+  const pending = await coll.pendingArrivals(db);
+  assert.deepEqual(pending.map((p) => p.collection.destination), ['RML-JHB']);
+
+  // The interim sheet stays open: a second interim transfer later in the day.
+  await fillSheet('INTERIM', [['RML-JHB', 'P330SP_MFSIG_PN', 84, '20261007']]);
+  const second = await sendTruck(db, u, D, 'INTERIM');
+  assert.deepEqual(second.map((r) => r.to), ['RML-JHB']);
+  // Lines already transferred can't change.
+  await assert.rejects(fillSheet('INTERIM', [['ZARMI-JHB', 'P500ST_MFSIG_PN', 70, '20261007']]), /Already dispatched/);
+
+  // A truck carrying only interim stock: approved with nothing to send.
+  day = await coll.collectionDay(db, D);
+  const rmlJhb = day.collections.find((c) => c.destination === 'RML-JHB').lines.find((l) => l.sku === 'P330SP_MFSIG_PN');
+  await coll.setCarriedBy(db, rmlJhb.id, 'MFE');
+  await coll.setLoaded(db, D, 'MFE', true);
+  const before = u.store.length;
+  assert.deepEqual(await sendTruck(db, u, D, 'MFE'), []);
+  assert.equal(u.store.length, before);
+  day = await coll.collectionDay(db, D);
+  assert.deepEqual(day.sheets.map((s) => [s.truck, sheetStatus(s)]), [['RML', 'approved'], ['MFE', 'approved'], ['INTERIM', 'open']]);
+  // No second leg for interim stock to RML-JHB either.
+  assert.deepEqual((await coll.pendingArrivals(db)).map((p) => [p.collection.destination, p.items.map((i) => i.sku)]),
+    [['RML-JHB', ['P330ST_MFSIG_PN']]]);
+});
+
+test('vehicles: add a truck, rename, switch off; codes are checked', async () => {
+  await assert.rejects(coll.createVehicle(db, { code: 'a b', name: 'X' }), /short code/);
+  let list = await coll.createVehicle(db, { code: 'trk3', name: 'Hired truck' });
+  assert.deepEqual(list.map((v) => v.code), ['RML', 'MFE', 'TRK3', 'INTERIM']);
+  await assert.rejects(coll.createVehicle(db, { code: 'TRK3' }), /already a vehicle/);
+  list = await coll.updateVehicle(db, 'TRK3', { name: 'Hired 8-ton', active: false });
+  assert.deepEqual(list.find((v) => v.code === 'TRK3'), { code: 'TRK3', name: 'Hired 8-ton', kind: 'truck', active: false, position: 3 });
+  // Switched off: not on new days, and nothing can be loaded on it.
+  await loadList();
+  assert.ok(!(await coll.collectionDay(db, D)).vehicles.some((v) => v.code === 'TRK3'));
+  const line = (await coll.collectionDay(db, D)).collections[0].lines[0];
+  await assert.rejects(coll.setLoad(db, line.id, 'TRK3', { qty: 1, batch: 'x' }), /switched off/);
 });

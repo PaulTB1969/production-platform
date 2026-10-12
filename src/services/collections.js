@@ -8,8 +8,8 @@ import { listEntries } from './schedule.js';
 import { pad8 } from '../domain/csv.js';
 import { finishedBatchNumber } from '../domain/unleashedPayloads.js';
 import {
-  DESTINATION_LABELS, TRUCKS, HOLDING, BULK_STORE, needsHoldingLeg, firstLegTo, warehouseOf, legName,
-  truckTransfers, transferRows, transfersCsv, parseBatches,
+  DESTINATION_LABELS, HOLDING, BULK_STORE, needsHoldingLeg, legTo, warehouseOf, legName,
+  truckTransfers, transferRows, transfersCsv, parseBatches, cleanVehicleCode,
 } from '../domain/collections.js';
 
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
@@ -52,7 +52,7 @@ export async function listCollections(q, { date, ids } = {}) {
       id: Number(l.id), sku: l.sku, description: l.description, qty: num(l.qty), needsBatch: flags.get(l.sku) === true,
       loads: (loads.get(l.id) || []).map((x) => ({
         id: Number(x.id), truck: x.truck, qty: num(x.qty), batch: x.batch,
-        dispatchId: num(x.dispatch_id), arrivalId: num(x.arrival_id),
+        dispatchId: num(x.dispatch_id), arrivalId: num(x.arrival_id), carriedBy: x.carried_by || null,
       })),
     })),
     dispatches: (disp.get(r.id) || []).map((d) => ({
@@ -75,16 +75,59 @@ async function sheet(q, date, truck) {
   return { date, truck, loadedAt: iso(r?.loaded_at), approvedAt: iso(r?.approved_at) };
 }
 
-function checkTruck(truck) {
-  if (!TRUCKS.includes(truck)) throw new UserError(`Unknown truck "${truck}".`);
+// ---------- vehicles ----------
+
+const vehicleRow = (r) => ({ code: r.code, name: r.name, kind: r.kind, active: r.active, position: r.position });
+
+// Trucks in order, then the interim transfer.
+export async function listVehicles(q) {
+  return (await q.query(`SELECT * FROM vehicles ORDER BY (kind = 'interim'), position, code`)).rows.map(vehicleRow);
 }
 
-// The whole day: list, both truck sheets, and what's on its way.
+async function vehicle(q, code, { forChange = false } = {}) {
+  const v = (await q.query('SELECT * FROM vehicles WHERE code = $1', [code])).rows[0];
+  if (!v) throw new UserError(`Unknown vehicle "${code}".`);
+  if (forChange && !v.active) throw new UserError(`${v.name} is switched off — switch it back on under Vehicles to use it.`, 409);
+  return vehicleRow(v);
+}
+
+// A new truck (the interim transfer is built in).
+export async function createVehicle(db, { code, name }) {
+  const c = cleanVehicleCode(code);
+  if (!c) throw new UserError('Give the vehicle a short code: capitals and digits, up to 12, e.g. "TRK3".');
+  const n = String(name || '').trim() || c;
+  const { m } = (await db.query(`SELECT MAX(position) AS m FROM vehicles WHERE kind = 'truck'`)).rows[0];
+  try {
+    await db.query(`INSERT INTO vehicles (code, name, kind, position) VALUES ($1, $2, 'truck', $3)`, [c, n, (m || 0) + 1]);
+  } catch (err) {
+    if (err.code === '23505') throw new UserError(`There is already a vehicle "${c}".`, 409);
+    throw err;
+  }
+  return listVehicles(db);
+}
+
+// Rename, or switch on/off (off: no longer offered for new days).
+export async function updateVehicle(db, code, { name, active }) {
+  await vehicle(db, code);
+  if (name !== undefined) {
+    if (!String(name).trim()) throw new UserError('The vehicle needs a name.');
+    await db.query('UPDATE vehicles SET name = $2 WHERE code = $1', [code, String(name).trim()]);
+  }
+  if (active !== undefined) await db.query('UPDATE vehicles SET active = $2 WHERE code = $1', [code, !!active]);
+  return listVehicles(db);
+}
+
+// The whole day: list, a sheet per vehicle (active ones, plus any switched
+// off since that already has something on this day), and the vehicles.
 export async function collectionDay(q, date) {
+  const collections = await listCollections(q, { date });
+  const used = new Set(collections.flatMap((c) => c.lines.flatMap((l) => l.loads.map((x) => x.truck))));
+  const vehicles = (await listVehicles(q)).filter((v) => v.active || used.has(v.code));
   return {
     date,
-    collections: await listCollections(q, { date }),
-    sheets: await Promise.all(TRUCKS.map((t) => sheet(q, date, t))),
+    collections,
+    vehicles,
+    sheets: await Promise.all(vehicles.map((v) => sheet(q, date, v.code))),
   };
 }
 
@@ -174,7 +217,7 @@ export async function deleteCollection(db, id) {
 // Qty Trf and Batch for one line on one truck, as written on that truck's
 // sheet. Empty qty and batch removes it. Locked once approved.
 export async function setLoad(db, lineId, truck, { qty, batch }) {
-  checkTruck(truck);
+  await vehicle(db, truck, { forChange: true });
   return db.tx(async (q) => {
     const l = await lineWithCollection(q, lineId);
     const s = await sheet(q, l.date, truck);
@@ -204,13 +247,15 @@ export async function setLoad(db, lineId, truck, { qty, batch }) {
 
 // The warehouse marks the sheet loaded (or takes that back before approval).
 export async function setLoaded(db, date, truck, loaded) {
-  checkTruck(truck);
+  const v = await vehicle(db, truck);
+  if (v.kind === 'interim') throw new UserError('An interim transfer has no Loaded step — approve it directly.');
   return db.tx(async (q) => {
     const s = await sheet(q, date, truck);
     if (s.approvedAt) throw new UserError(`The ${truck} sheet is already approved.`, 409);
     if (loaded) {
-      const { missing, transfers } = truckTransfers(await listCollections(q, { date }), truck);
-      if (!transfers.length) throw new UserError(`Nothing is on the ${truck} sheet yet — fill in Qty Trf first.`);
+      const day = await listCollections(q, { date });
+      const { missing, transfers } = truckTransfers(day, truck);
+      if (!transfers.length && !carriedInterim(day, truck).length) throw new UserError(`Nothing is on the ${truck} sheet yet — fill in Qty Trf first.`);
       if (missing.length) throw new UserError(`Batch missing on the ${truck} sheet for: ${missing.join(', ')}.`, 409);
     }
     await q.query(
@@ -222,15 +267,22 @@ export async function setLoaded(db, date, truck, loaded) {
   });
 }
 
+// Interim loads a truck physically carries (already transferred by the
+// interim transfer, so not transferred again).
+function carriedInterim(day, truck) {
+  return day.flatMap((c) => c.lines.flatMap((l) => l.loads.filter((x) => x.carriedBy === truck && Number(x.qty) > 0).map((x) => ({ c, l, x }))));
+}
+
 // Approval step 1 (shared by Send and CSV): one dispatch per section with
-// loads on this truck, loads attached to it. Returns every dispatch for the
-// truck and date not yet in Unleashed (new ones and any whose send failed),
-// with what goes on it.
+// loads on this vehicle, loads attached to it. Returns the vehicle and every
+// dispatch for it and the date not yet in Unleashed (new ones and any whose
+// send failed), with what goes on it and where it goes. A truck carrying
+// only interim stock has nothing to send: it is simply approved.
 export async function prepareApproval(db, date, truck) {
-  checkTruck(truck);
+  const v = await vehicle(db, truck);
   return db.tx(async (q) => {
     const s = await sheet(q, date, truck);
-    if (!s.loadedAt) throw new UserError(`The ${truck} sheet isn't marked Loaded yet.`, 409);
+    if (v.kind === 'truck' && !s.loadedAt) throw new UserError(`The ${truck} sheet isn't marked Loaded yet.`, 409);
     const { transfers, missing } = truckTransfers(await listCollections(q, { date }), truck);
     if (missing.length) throw new UserError(`Batch missing on the ${truck} sheet for: ${missing.join(', ')}.`, 409);
     for (const { collection, loads } of transfers) {
@@ -243,16 +295,47 @@ export async function prepareApproval(db, date, truck) {
       for (const d of c.dispatches) {
         if (d.truck !== truck || d.exportedAt) continue;
         const items = c.lines.flatMap((l) => l.loads.filter((x) => x.dispatchId === d.id).map((x) => ({ sku: l.sku, qty: x.qty, batch: x.batch })));
-        pending.push({ collection: c, dispatch: d, items });
+        pending.push({ collection: c, dispatch: d, items, to: legTo(c.destination, v.kind), comments: legName(c.destination, v.name) });
       }
     }
-    if (!pending.length) throw new UserError(`Nothing on the ${truck} sheet left to send.`);
-    return pending;
+    if (!pending.length) {
+      if (v.kind === 'truck' && carriedInterim(day, truck).length) {
+        await q.query(`INSERT INTO truck_sheets (date, truck, approved_at) VALUES ($1, $2, now())
+          ON CONFLICT (date, truck) DO UPDATE SET approved_at = COALESCE(truck_sheets.approved_at, now())`, [date, truck]);
+        return { vehicle: v, pending };
+      }
+      if (v.kind === 'interim') throw new UserError('Nothing on the interim transfer yet — fill in Qty Trf first.');
+      throw new UserError(`Nothing on the ${truck} sheet left to send.`);
+    }
+    return { vehicle: v, pending };
   });
 }
 
-// Approval step 2: once every dispatch of the truck is in Unleashed.
+// Which truck physically carries an interim load (null = not decided yet).
+export async function setCarriedBy(db, lineId, carriedBy) {
+  return db.tx(async (q) => {
+    const l = await lineWithCollection(q, lineId);
+    const load = (await q.query(`SELECT x.* FROM collection_loads x JOIN vehicles v ON v.code = x.truck
+      WHERE x.line_id = $1 AND v.kind = 'interim'`, [lineId])).rows[0];
+    if (!load) throw new UserError('There is no interim transfer on that line.', 404);
+    const to = carriedBy ? String(carriedBy) : null;
+    for (const t of [load.carried_by, to].filter(Boolean)) {
+      const v = await vehicle(q, t);
+      if (v.kind !== 'truck') throw new UserError('Pick a truck.');
+      if ((await sheet(q, l.date, t)).approvedAt) throw new UserError(`The ${v.name} sheet is approved — it can no longer change.`, 409);
+    }
+    await q.query('UPDATE collection_loads SET carried_by = $2 WHERE id = $1', [load.id, to]);
+    return getCollection(q, l.collection_id);
+  });
+}
+
+// Approval step 2: once every dispatch of the truck is in Unleashed, the
+// truck sheet is approved (locked). The interim sheet never locks: lines
+// already transferred are locked one by one, and more can be added and
+// approved again later in the day.
 export async function markApprovedIfDone(q, date, truck) {
+  const v = (await q.query('SELECT kind FROM vehicles WHERE code = $1', [truck])).rows[0];
+  if (v?.kind === 'interim') return;
   const day = await listCollections(q, { date });
   const unsent = day.some((c) => c.dispatches.some((d) => d.truck === truck && !d.exportedAt));
   if (!unsent) await q.query('UPDATE truck_sheets SET approved_at = COALESCE(approved_at, now()) WHERE date = $1 AND truck = $2', [date, truck]);
@@ -272,18 +355,20 @@ async function saveExport(q, kind, date, filename, csv) {
   return { id: Number(id), kind, date, filename };
 }
 
-// Approve a truck by CSV: one MFT-numbered transfer per section.
+// Approve a vehicle by CSV: one MFT-numbered transfer per section.
+// null when there was nothing to transfer (a truck with only interim stock).
 export async function approveTruckCsv(db, date, truck) {
-  const pending = await prepareApproval(db, date, truck);
+  const { pending } = await prepareApproval(db, date, truck);
+  if (!pending.length) return null;
   if (pending.some(({ dispatch }) => dispatch.sendStartedAt)) {
     throw new UserError('A send to Unleashed for this truck is unconfirmed — press Approve & send again instead of using the CSV, so nothing is created twice.', 409);
   }
   return db.tx(async (q) => {
     const numbers = await takeNumbers(q, pending.length);
     const rows = [];
-    for (const { collection: c, dispatch: d, items } of pending) {
+    for (const { dispatch: d, items, to, comments } of pending) {
       const number = numbers.shift();
-      rows.push(...transferRows(number, BULK_STORE, firstLegTo(c.destination), legName(c.destination, truck), items));
+      rows.push(...transferRows(number, BULK_STORE, to, comments, items));
       await q.query('UPDATE collection_dispatches SET transfer_number = $2, dispatch_exported_at = now(), send_error = NULL WHERE id = $1', [d.id, number]);
     }
     await markApprovedIfDone(q, date, truck);
@@ -293,7 +378,7 @@ export async function approveTruckCsv(db, date, truck) {
 
 // Undo a CSV approval that was never uploaded: the sheet goes back to Loaded.
 export async function undoTruckCsv(db, date, truck) {
-  checkTruck(truck);
+  await vehicle(db, truck);
   return db.tx(async (q) => {
     const day = await listCollections(q, { date });
     const ds = day.flatMap((c) => c.dispatches.filter((d) => d.truck === truck));
@@ -315,6 +400,8 @@ export async function undoTruckCsv(db, date, truck) {
 // date, with what's waiting (per SKU and batch, both trucks together).
 export async function pendingArrivals(q) {
   const all = await listCollections(q);
+  // Interim transfers went straight to the destination: no second leg.
+  const interim = new Set((await listVehicles(q)).filter((v) => v.kind === 'interim').map((v) => v.code));
   const out = [];
   for (const c of all) {
     if (!c.viaHolding) continue;
@@ -323,6 +410,7 @@ export async function pendingArrivals(q) {
     const trucks = new Set();
     for (const l of c.lines) {
       for (const x of l.loads) {
+        if (interim.has(x.truck)) continue;
         if (!x.dispatchId || !sentIds.has(x.dispatchId) || x.arrivalId) continue;
         items.push({ loadId: x.id, sku: l.sku, qty: x.qty, batch: x.batch });
         trucks.add(x.truck);

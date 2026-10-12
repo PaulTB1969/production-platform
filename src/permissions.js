@@ -26,6 +26,7 @@ export function requiredFor(method, path) {
   if (path === '/unleashed/send/transfers') return { area: 'requisitions', level: 'edit', action: 'unleashed' };
 
   if (/^\/collections\/sheets\/[^/]+\/(send|csv|undo-csv)$/.test(path)) return { area: 'collections', level: 'edit', action: 'approve' };
+  if (/^\/collections\/vehicles(\/|$)/.test(path) && write) return { area: 'collections', level: 'edit', action: 'approve' };
   if (/^\/collections\/[^/]+\/arrival\/(send|csv)$/.test(path)) return { area: 'collections', level: 'edit', action: 'unleashed' };
 
   if (/^\/samples\/[^/]+\/[^/]+\/signoff$/.test(path)) return { area: 'samples', level: 'view', action: 'samplesSignOff' };
@@ -82,6 +83,9 @@ const LABELS = [
   [/^POST \/collections\/[^/]+\/arrival\/send$/, 'Sent a second leg to Unleashed'],
   [/^POST \/collections\/[^/]+\/arrival\/csv$/, 'Exported a second leg CSV'],
   [/^(PATCH|DELETE) \/collections\/lines\/[^/]+$/, 'Changed the collection list'],
+  [/^PUT \/collections\/lines\/[^/]+\/carried-by$/, 'Chose the truck for interim stock'],
+  [/^POST \/collections\/vehicles$/, 'Added a vehicle'],
+  [/^PATCH \/collections\/vehicles\/[^/]+$/, 'Changed a vehicle'],
   [/^(PATCH|DELETE) \/collections\/[^/]+$/, 'Changed a collection'],
   [/^POST \/stock\/adjustments$/, 'Adjusted line stock'],
   [/^PUT \/samples\/[^/]+\/[^/]+\/results\/.+$/, 'Filled in a sample result'],
