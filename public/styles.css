@@ -317,3 +317,20 @@
   .bd-count{font-size:13.5px;}
   .bd-count.ok b{color:var(--good);} .bd-count.warn b{color:var(--danger);}
   .pick-btn{margin-top:6px;}
+  .bd-form:focus{outline:none;}
+  .bd-tools{justify-content:flex-end;}
+  /* Phones: the pop-up nearly full width, tighter spacing, smaller boxes. */
+  @media (max-width:560px){
+    dialog.bdialog{width:calc(100vw - 12px); max-height:calc(100vh - 24px);}
+    .bd-form{padding:12px 12px 10px; gap:8px; max-height:calc(100vh - 26px);}
+    .bd-title{font-size:14px; padding-bottom:8px;}
+    .bd-scroll{max-height:52vh;}
+    .bd-table{font-size:12.5px;}
+    .bd-table th{padding:6px 6px; font-size:11px;}
+    .bd-table td{padding:4px 6px;}
+    .bd-table input{width:68px; padding:4px 5px; font-size:13px;}
+    .bd-table td:nth-child(2){white-space:nowrap; font-size:11.5px;}
+    .bd-count{font-size:12.5px; flex:1 1 100%;}
+    .bd-spacer{display:none;}
+    .bd-foot{gap:6px; padding-top:8px; justify-content:flex-end;}
+  }

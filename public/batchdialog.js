@@ -35,15 +35,16 @@ export function openBatchDialog(opts) {
   const dlg = document.createElement('dialog');
   dlg.className = 'bdialog';
   dlg.innerHTML =
-    '<form method="dialog" class="bd-form">' +
+    '<form method="dialog" class="bd-form" tabindex="-1">' +
       '<button type="button" class="bd-x" aria-label="Close" data-cancel>×</button>' +
-      '<div class="bd-title">Select batch numbers for <b>' + escapeHtml(title) + '</b>' + (subtitle ? ' — ' + escapeHtml(subtitle) : '') + '</div>' +
+      // The description is kept (as help) but not shown, to keep it compact on phones.
+      '<div class="bd-title">Select batch numbers for <b>' + escapeHtml(title) + '</b>' + (subtitle ? '<span class="help"> — ' + escapeHtml(subtitle) + '</span>' : '') + '</div>' +
       '<div class="bd-tools">' +
-        '<label>Filter batch number <input type="text" class="bd-filter" autocomplete="off"></label>' +
+        '<label class="help">Filter batch number <input type="text" class="bd-filter" autocomplete="off"></label>' +
         '<span class="bd-links"><button type="button" class="bd-link" data-oldest>Select oldest</button> | <button type="button" class="bd-link" data-none>Select none</button></span>' +
       '</div>' +
       (refresh ? '<div class="bd-live">Checking Unleashed for new batches…</div>' : '') +
-      '<div class="bd-scroll"><table class="bd-table"><thead><tr><th>Batch number</th><th>Expiry</th><th class="num">Available</th>' +
+      '<div class="bd-scroll"><table class="bd-table"><thead><tr><th>Batch</th><th>Expiry</th><th class="num">Available</th>' +
         '<th class="num">' + escapeHtml(qtyLabel) + '</th>' + (wastage ? '<th class="num">Wastage</th>' : '') + '</tr></thead><tbody></tbody></table></div>' +
       (allowOther ? '<div class="bd-other"><span>Another batch:</span><input type="text" class="bd-other-batch" placeholder="batch number" autocomplete="off">' +
         '<input type="number" min="0" step="1" class="bd-other-qty" placeholder="qty"><button type="button" class="btn-ghost btn-small" data-other>Add</button></div>' : '') +
@@ -184,6 +185,7 @@ export function openBatchDialog(opts) {
   return new Promise((resolve) => {
     done = resolve;
     dlg.showModal();
-    dlg.querySelector('.bd-filter').focus();
+    // No input focused, so a phone doesn't open its keyboard straight away.
+    dlg.querySelector('.bd-form').focus();
   });
 }
