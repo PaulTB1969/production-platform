@@ -384,7 +384,7 @@ export async function finishedGoodsStock(q, date) {
        FROM component_batches WHERE component_sku = ANY($1) ORDER BY expiry_date NULLS LAST, batch_number`,
     [products.map((p) => p.sku)],
   )).rows;
-  for (const b of ub) (batches[b.sku] ||= []).push({ batchNumber: b.batch_number, qty: b.quantity_remaining, source: 'unleashed' });
+  for (const b of ub) (batches[b.sku] ||= []).push({ batchNumber: b.batch_number, qty: b.quantity_remaining, expiryDate: b.expiry, source: 'unleashed' });
   if (date) {
     const from = new Date(date + 'T00:00:00Z'); from.setUTCDate(from.getUTCDate() - 7);
     for (const e of await listEntries(q, { from: from.toISOString().slice(0, 10), to: date })) {

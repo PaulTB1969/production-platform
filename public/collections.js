@@ -8,6 +8,7 @@
 // from Qty Trf to Batch to the next row.
 
 import { api, todayStr, escapeHtml, fmtNum, fmtTimestamp, showError, download, busy, confirmClick, setupFocus, renderSyncBanner } from './common.js';
+import { openBatchDialog } from './batchdialog.js';
 
 const DESTINATIONS = [
   ['CPT', 'Cape Town'], ['RML-JHB', 'RM Logistics JHB'], ['ZARMI-JHB', 'Johannesburg - Zarmi'],
@@ -132,16 +133,6 @@ function allocated(sku, batch, exceptLoadId) {
   return n;
 }
 
-function batchOptionsFor(l, x) {
-  const list = state.stock.batches[l.sku] || [];
-  return '<option value="">+ batch…</option>' + list.map((b) => {
-    const used = allocated(l.sku, b.batchNumber, x?.id);
-    const where = b.source === 'unleashed' ? fmtNum(b.qty) + ' in PRD' : fmtNum(b.qty) + ' cases · ' + (b.note || 'schedule');
-    const left = b.qty - used;
-    return '<option value="' + escapeHtml(b.batchNumber) + '" data-left="' + left + '">' + escapeHtml(b.batchNumber + ' — ' + where +
-      (used ? ' · ' + fmtNum(used) + ' on today\'s sheets → ' + fmtNum(left) + ' left' : '')) + '</option>';
-  }).join('') + '<option value="__other">other batch (type it)…</option>';
-}
 
 function truckRow(c, l, truck, status) {
   const other = TRUCKS.find((t) => t !== truck);
@@ -162,12 +153,11 @@ function truckRow(c, l, truck, status) {
     const chips = entries.map((e, i) => '<span class="bchip">' + escapeHtml(e.batch) +
       (multi ? ' <b>' + fmtNum(e.qty) + '</b>' : '') +
       '<button type="button" class="rm" data-rm-batch="' + l.id + '" data-i="' + i + '" title="Remove this batch">✕</button></span>').join('');
+    const needed = !entries.length && l.needsBatch && x?.qty;
     batchCell = '<td><div class="batches">' + chips +
-      '<span class="badd"><select class="bpick" data-batch-pick="' + l.id + '">' + batchOptionsFor(l, x) + '</select>' +
-      '<input class="bother" type="text" placeholder="batch" hidden>' +
-      '<input class="bqty qty" type="number" min="0" step="1" placeholder="qty" title="Quantity from this batch">' +
-      '<button type="button" class="btn-ghost btn-small" data-batch-add="' + l.id + '">Add</button></span>' +
-      (!entries.length && l.needsBatch && x?.qty ? '<span class="bneed">batch needed</span>' : '') +
+      '<button type="button" class="' + (needed ? 'btn-primary' : 'btn-ghost') + ' btn-small no-print" data-pick-batches="' + l.id + '">' +
+      (entries.length ? 'Batches…' : 'Select batch…') + '</button>' +
+      (needed ? '<span class="bneed">batch needed</span>' : '') +
       '</div></td>';
   }
   return '<tr class="' + (locked ? 'locked' : '') + (diff ? ' diff' : '') + '" data-line="' + l.id + '" data-coll="' + c.id + '">' +
@@ -260,24 +250,34 @@ function saveQty(input) {
   saveLoad(input.dataset.trf, { qty, batch: x?.batch || '' });
 }
 
-// Adds a batch (with its quantity) to the line; several batches set Qty Trf.
-function addBatch(lineId) {
-  const row = sheetEl.querySelector('tr[data-line="' + lineId + '"]');
-  const pick = row.querySelector('.bpick');
-  const batch = (pick.value === '__other' ? row.querySelector('.bother').value : pick.value).trim();
-  if (!batch) { showError('Pick a batch first.'); return; }
+// The batch pop-up for a line on this truck: finished-goods batches (PRD
+// stock and the Production Schedule), less what's already on today's other
+// loads. One batch takes Qty Trf; several set it to their total.
+async function pickBatches(lineId) {
   const { l } = findLine(lineId);
-  const x = loadOf(l, state.tab);
-  const entries = entriesOf(x).map((e) => ({ ...e, qty: e.qty ?? x.qty }));
-  const typed = row.querySelector('.bqty').value;
-  // No quantity typed: the first batch takes Qty Trf; later ones take what's still needed.
-  const have = entries.reduce((s, e) => s + (Number(e.qty) || 0), 0);
-  const qty = typed !== '' ? Number(typed) : (entries.length ? Math.max(0, (x?.qty || 0) - have) : (x?.qty || 0));
-  if (entries.length && !(qty > 0)) { showError('Enter how many come from batch ' + batch + '.'); return; }
-  const same = entries.find((e) => e.batch === batch);
-  if (same) same.qty += qty; else entries.push({ batch, qty });
-  const total = entries.length > 1 ? entries.reduce((s, e) => s + Number(e.qty), 0) : (qty || x?.qty || null);
-  saveLoad(lineId, { qty: total, batch: formatBatches(entries) }, '.bpick');
+  const truck = state.tab;
+  const x = loadOf(l, truck);
+  const o = loadOf(l, TRUCKS.find((t) => t !== truck));
+  const entries = entriesOf(x).map((e) => ({ batchNumber: e.batch, qty: e.qty ?? x?.qty ?? 0 }));
+  const batches = (state.stock.batches[l.sku] || []).map((b) => ({
+    batchNumber: b.batchNumber,
+    expiryDate: b.expiryDate || '',
+    available: b.qty - allocated(l.sku, b.batchNumber, x?.id),
+    note: b.source === 'unleashed' ? 'in PRD' : (b.note || 'Production Schedule'),
+  }));
+  const picked = await openBatchDialog({
+    title: l.sku,
+    subtitle: (l.description || '') + ' · ' + truck,
+    required: x?.qty || Math.max(0, l.qty - (o?.qty || 0)),
+    batches,
+    selected: entries,
+    allowOther: true,
+    qtyLabel: 'Qty Trf',
+  });
+  if (!picked) return;
+  const list = picked.map((p) => ({ batch: p.batchNumber, qty: p.qty }));
+  const total = list.reduce((t, e) => t + e.qty, 0);
+  saveLoad(lineId, { qty: list.length ? total : (x?.qty ?? null), batch: formatBatches(list) });
 }
 
 function removeBatch(lineId, i) {
@@ -334,8 +334,8 @@ sheetEl.addEventListener('keydown', (e) => {
 
 sheetEl.addEventListener('click', async (e) => {
   const date = state.date;
-  const ba = e.target.closest('[data-batch-add]');
-  if (ba) { addBatch(ba.dataset.batchAdd); return; }
+  const pb = e.target.closest('[data-pick-batches]');
+  if (pb) { pickBatches(pb.dataset.pickBatches); return; }
   const br = e.target.closest('[data-rm-batch]');
   if (br) { removeBatch(br.dataset.rmBatch, Number(br.dataset.i)); return; }
   const add = e.target.closest('[data-add]');

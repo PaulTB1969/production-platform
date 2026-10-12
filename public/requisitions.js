@@ -6,6 +6,7 @@ import {
   api, todayStr, escapeHtml, fmtNum, fmtTimestamp, fmtDateLabel, showError,
   download, busy, confirmClick, setupFocus, renderSyncBanner, LINE_LABELS, LINES,
 } from './common.js';
+import { openBatchDialog } from './batchdialog.js';
 
 const state = {
   bulk: {},        // componentSku -> {batches} (bulk store, from Unleashed)
@@ -67,12 +68,6 @@ function renderGroupFilter() {
 
 // ---------- rendering ----------
 
-function batchOptionsHtml(sku) {
-  const info = state.bulk[sku];
-  if (!info || info.batches.length === 0) return '<option value="">no batches available</option>';
-  return '<option value="">pick a batch</option>' + info.batches.map((b) =>
-    '<option value="' + escapeHtml(b.batchNumber) + '">' + escapeHtml(b.batchNumber) + ' — ' + fmtNum(b.quantityRemaining) + ' left' + (b.expiryDate ? ' (exp ' + escapeHtml(b.expiryDate) + ')' : '') + '</option>').join('');
-}
 
 function renderJobList() {
   const list = document.getElementById('jobList');
@@ -178,13 +173,14 @@ function renderLine(id, l, idx, locked) {
         rmBtn + '</div>';
     }
     const hasBatches = state.bulk[l.sku] && state.bulk[l.sku].batches.length > 0;
+    // One batch button per material, on its first line.
+    const firstOfSku = (state.entries[id].lines || []).findIndex((x) => x.sku === l.sku) === idx;
+    const pickBtn = (primary) => (locked || !firstOfSku ? '' :
+      '<button type="button" class="' + (primary ? 'btn-primary' : 'btn-ghost') + ' btn-small" data-pick-batches="' + id + '" data-sku="' + escapeHtml(l.sku) + '">' +
+      (primary ? 'Select batches…' : 'Change batches…') + '</button>');
     if (!l.batchNumber) {
       const assign = locked ? '' : hasBatches
-        ? '<span class="allocate-wrap">' +
-            '<select class="allocate-batch">' + batchOptionsHtml(l.sku) + '</select>' +
-            '<input type="number" class="allocate-qty" min="0" step="1" max="' + l.qtyUsed + '" value="' + l.qtyUsed + '" title="Quantity for this batch">' +
-            '<button type="button" class="btn-ghost btn-small" data-allocate="' + id + '" data-idx="' + idx + '">Assign</button>' +
-          '</span>'
+        ? pickBtn(true)
         : '<div class="no-batches">No available batches for ' + escapeHtml(l.sku) + ' as of the last Unleashed sync.</div>';
       return '<div class="usage-line wrap" style="color:var(--warn);">' +
         '<span class="batch-no">' + escapeHtml(l.sku) + ' · needs a batch</span>' +
@@ -192,13 +188,7 @@ function renderLine(id, l, idx, locked) {
     }
     const b = state.bulk[l.sku] ? state.bulk[l.sku].batches.find((x) => x.batchNumber === l.batchNumber) : null;
     const over = b && l.qtyUsed > b.quantityRemaining;
-    const split = (locked || !hasBatches) ? '' :
-      '<details class="split-batch"><summary class="btn-ghost btn-small">+ split to another batch</summary>' +
-        '<span class="allocate-wrap">' +
-          '<select class="allocate-batch">' + batchOptionsHtml(l.sku) + '</select>' +
-          '<input type="number" class="allocate-qty" min="0" step="1" max="' + l.qtyUsed + '" placeholder="qty" title="Quantity to move to this batch">' +
-          '<button type="button" class="btn-ghost btn-small" data-allocate="' + id + '" data-idx="' + idx + '">Split</button>' +
-        '</span></details>';
+    const split = (locked || !hasBatches) ? '' : pickBtn(false);
     return '<div class="usage-line wrap" style="' + (over ? 'color:var(--danger)' : '') + '">' +
       '<span class="batch-no">' + escapeHtml(l.sku) + ' · ' + escapeHtml(l.batchNumber) + '</span>' +
       (over ? '<span title="More than was in the bulk store at the last sync">⚠</span>' : '') +
@@ -269,21 +259,32 @@ function addComponent(lines, m, qty) {
 
 // Assigns a batch; a smaller qty splits off onto that batch (merging into a
 // line already on it), so one material can span several batches.
-function allocateBatch(id, idx, batchNumber, qty) {
+// The batch pop-up for one material: bulk-store (PRD) batches, oldest first.
+// The material's lines become one per batch chosen, plus a "needs a batch"
+// line for any quantity not yet given a batch.
+async function pickBatches(id, sku) {
   const lines = linesOf(id);
-  const line = lines[idx];
-  const full = line.qtyUsed || 0;
-  const amt = !qty || qty <= 0 ? full : Math.min(qty, full);
-  if (amt >= full) {
-    line.batchNumber = batchNumber;
-  } else {
-    line.qtyUsed = full - amt;
-    const existing = lines.find((l, i) => i !== idx && l.sku === line.sku && l.batchNumber === batchNumber);
-    if (existing) existing.qtyUsed += amt;
-    else lines.push({ sku: line.sku, description: line.description, batchNumber, qtyUsed: amt, needsBatch: true });
-  }
-  return save(id, { lines });
+  const mine = lines.filter((l) => l.sku === sku);
+  const required = mine.reduce((t, l) => t + (Number(l.qtyUsed) || 0), 0);
+  const picked = await openBatchDialog({
+    title: sku,
+    subtitle: (mine[0]?.description || state.materials[sku]?.description || '') + ' · from the bulk store (PRD)',
+    required,
+    batches: (state.bulk[sku]?.batches || []).map((b) => ({ batchNumber: b.batchNumber, expiryDate: b.expiryDate, available: b.quantityRemaining })),
+    selected: mine.filter((l) => l.batchNumber).map((l) => ({ batchNumber: l.batchNumber, qty: l.qtyUsed })),
+  });
+  if (!picked) return;
+  const description = mine[0]?.description || '';
+  const next = picked.map((p) => ({ sku, description, batchNumber: p.batchNumber, qtyUsed: p.qty, needsBatch: true }));
+  const chosen = picked.reduce((t, p) => t + p.qty, 0);
+  if (chosen < required) next.push({ sku, description, batchNumber: null, qtyUsed: required - chosen, needsBatch: true });
+  // Same place in the list as before.
+  const at = lines.findIndex((l) => l.sku === sku);
+  const rest = lines.filter((l) => l.sku !== sku);
+  rest.splice(at, 0, ...next);
+  await save(id, { lines: rest });
 }
+
 
 // ---------- events ----------
 
@@ -310,15 +311,8 @@ jobList.addEventListener('click', (e) => {
     return;
   }
 
-  const allocBtn = e.target.closest('[data-allocate]');
-  if (allocBtn) {
-    const wrap = allocBtn.closest('.allocate-wrap');
-    const batchNumber = wrap.querySelector('.allocate-batch').value;
-    const qtyVal = wrap.querySelector('.allocate-qty').value;
-    if (!batchNumber) { showError('Pick a batch first.'); return; }
-    allocateBatch(allocBtn.dataset.allocate, Number(allocBtn.dataset.idx), batchNumber, qtyVal === '' ? null : parseFloat(qtyVal));
-    return;
-  }
+  const pickBtn = e.target.closest('[data-pick-batches]');
+  if (pickBtn) { pickBatches(pickBtn.dataset.pickBatches, pickBtn.dataset.sku); return; }
 
   const rm = e.target.closest('[data-rm-line]');
   if (rm) {

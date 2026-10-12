@@ -6,6 +6,7 @@ import {
   api, todayStr, escapeHtml, fmtNum, fmtTimestamp, lineShortCode, numOrNull, showError,
   download, busy, confirmClick, setupFocus, renderSyncBanner, LINE_LABELS,
 } from './common.js';
+import { openBatchDialog } from './batchdialog.js';
 
 const state = {
   recipes: {},              // sku -> recipe
@@ -285,17 +286,11 @@ function renderComponentBlock(id, entry, line) {
   if (usage.some((u) => isOver(u.batchNumber))) { cls = 'bad'; text = 'exceeds what a selected batch had at this line'; }
   out += '<div class="status-strip"><span class="status-badge ' + cls + '">' + text + '</span></div>';
 
-  if (pickable.length === 0) {
+  if (pickable.length === 0 && usage.length === 0) {
     out += '<div class="no-batches" style="margin-top:8px;">No batches of ' + comp + ' left at ' + escapeHtml(entry.line || 'this line') + ' — complete a Stock Requisition for it first.</div>';
   } else {
-    out += '<div class="add-usage">' +
-      '<select data-batch-select="' + id + '" data-comp="' + comp + '">' +
-        pickable.map((b) => '<option value="' + escapeHtml(b.batchNumber) + '">' + escapeHtml(b.batchNumber) + ' — ' + fmtNum(b.quantityRemaining) + ' left' + (b.expiryDate ? ' (exp ' + escapeHtml(b.expiryDate) + ')' : '') + '</option>').join('') +
-      '</select>' +
-      '<input type="number" min="0" step="1" placeholder="qty used" data-qty-input="' + id + '" data-comp="' + comp + '">' +
-      '<input type="number" min="0" step="1" placeholder="wastage" data-wastage-input="' + id + '" data-comp="' + comp + '">' +
-      '<button type="button" class="btn-ghost btn-small" data-add-usage="' + id + '" data-comp="' + comp + '">Add</button>' +
-    '</div>';
+    out += '<button type="button" class="' + (usage.length ? 'btn-ghost' : 'btn-primary') + ' btn-small pick-btn" data-pick-batches="' + id + '" data-comp="' + comp + '">' +
+      (usage.length ? 'Change batches…' : 'Select batches…') + '</button>';
   }
   return out + '</div>';
 }
@@ -323,16 +318,31 @@ function showNotice() {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-function addUsage(id, componentSku, batchNumber, qty, wastage) {
-  const usage = (state.entries[id].componentUsage || []).map((u) => ({ ...u }));
-  const existing = usage.find((u) => u.componentSku === componentSku && u.batchNumber === batchNumber);
-  if (existing) {
-    existing.qtyUsed = (existing.qtyUsed || 0) + qty;
-    existing.wastage = (existing.wastage || 0) + wastage;
-  } else {
-    usage.push({ componentSku, batchNumber, qtyUsed: qty, wastage });
-  }
-  return save(id, { componentUsage: usage });
+// The batch pop-up for one component: what's at the line (plus what this
+// job already has, which the line stock has taken off), used and wastage.
+async function pickBatches(id, componentSku) {
+  const entry = state.entries[id];
+  const recipe = state.recipes[entry.sku];
+  const line = recipe?.lines.find((l) => l.componentSku === componentSku);
+  const cases = hasValue(entry.actualCases) ? entry.actualCases : entry.plannedCases;
+  const mine = (entry.componentUsage || []).filter((u) => u.componentSku === componentSku);
+  const atLine = state.lineBatches[entry.line + '|' + componentSku]?.batches || [];
+  const batches = atLine.map((b) => {
+    const u = mine.find((x) => x.batchNumber === b.batchNumber);
+    return { batchNumber: b.batchNumber, expiryDate: b.expiryDate, available: b.quantityRemaining + (u ? (u.qtyUsed || 0) + (u.wastage || 0) : 0) };
+  }).filter((b) => b.available > 0 || mine.some((u) => u.batchNumber === b.batchNumber));
+  const picked = await openBatchDialog({
+    title: componentSku,
+    subtitle: (line?.componentDescription || '') + ' · ' + entry.sku + ' at ' + (entry.line || ''),
+    required: (line?.qtyPerUnit || 0) * (cases || 0),
+    batches,
+    selected: mine.map((u) => ({ batchNumber: u.batchNumber, qty: u.qtyUsed, wastage: u.wastage })),
+    wastage: true,
+    qtyLabel: 'Qty used',
+  });
+  if (!picked) return;
+  const others = (entry.componentUsage || []).filter((u) => u.componentSku !== componentSku);
+  await save(id, { componentUsage: [...others, ...picked.map((p) => ({ componentSku, batchNumber: p.batchNumber, qtyUsed: p.qty, wastage: p.wastage }))] });
 }
 
 function removeUsage(id, componentSku, batchNumber) {
@@ -362,17 +372,8 @@ jobList.addEventListener('click', async (e) => {
     return;
   }
 
-  const addBtn = e.target.closest('[data-add-usage]');
-  if (addBtn) {
-    const id = addBtn.dataset.addUsage, comp = addBtn.dataset.comp;
-    const block = addBtn.closest('.add-usage');
-    const batchNumber = block.querySelector('[data-batch-select]').value;
-    const qty = numOrNull(block.querySelector('[data-qty-input]').value) || 0;
-    const wastage = numOrNull(block.querySelector('[data-wastage-input]').value) || 0;
-    if (!batchNumber || (qty <= 0 && wastage <= 0)) return;
-    addUsage(id, comp, batchNumber, qty, wastage);
-    return;
-  }
+  const pickBtn = e.target.closest('[data-pick-batches]');
+  if (pickBtn) { pickBatches(pickBtn.dataset.pickBatches, pickBtn.dataset.comp); return; }
 
   const rm = e.target.closest('[data-rm-usage]');
   if (rm) { removeUsage(rm.dataset.rmUsage, rm.dataset.comp, rm.dataset.batch); return; }
