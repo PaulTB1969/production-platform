@@ -196,6 +196,10 @@ me.then((user) => {
   document.body.classList.toggle('view-only', level === 'view');
   document.body.classList.toggle('no-unleashed', !user.actions?.unleashed);
   document.body.classList.toggle('no-approve', !user.actions?.approve);
+  // Anything marked data-requires="<action>" is only for roles with that action.
+  for (const el of document.querySelectorAll('[data-requires]')) {
+    if (!user.actions?.[el.dataset.requires]) el.hidden = true;
+  }
 
   // Menu: only what the role can open, plus Users & Roles and the account links.
   const list = document.getElementById('menuList');

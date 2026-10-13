@@ -51,6 +51,7 @@
   </div>
 
   <div class="card card-pad" id="generateSection" data-needs="edit">
+    <div data-requires="generateRequisitions">
     <div class="section-title">Generate Stock Requisitions</div>
     <div class="export-note help" style="margin-top:-4px;">Creates one requisition per line from the Production Schedule's still-scheduled jobs for a date — jobs already in progress or completed are left out, and a line that already has a requisition for that date is left alone rather than overwritten. Raw materials that aren't batch-tracked are reduced by what's already at the line.</div>
     <div class="filter-row" style="margin-top:10px;">
@@ -61,6 +62,7 @@
       <button type="button" class="btn-primary btn-small" id="genRequestBtn">Generate</button>
     </div>
     <div class="export-note" id="genStatusNote" style="margin-top:8px;"></div>
+    </div>
 
     <div class="section-title" style="margin-top:18px;">Create a requisition</div>
     <div class="export-note help" style="margin-top:-4px;">An empty requisition for one line, to fill in by hand. Use it for a top-up or anything not on the schedule. A line that already has a requisition for the date gets the next number, e.g. "(2)".</div>

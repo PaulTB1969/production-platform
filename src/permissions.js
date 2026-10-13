@@ -17,6 +17,10 @@ export const lineAllowed = (user, line) => !user?.lines?.length || user.lines.in
 export function requiredFor(method, path) {
   const write = method !== 'GET' && method !== 'HEAD';
   const level = write ? 'edit' : 'view';
+  // Functions only some roles have (Users & Roles → actions).
+  if (path === '/schedule/upload' && write) return { area: 'schedule', level: 'edit', action: 'uploadCsv' };
+  if (path === '/collections/upload' && write) return { area: 'collections', level: 'edit', action: 'uploadCsv' };
+  if (path === '/requisitions/generate' && write) return { area: 'requisitions', level: 'edit', action: 'generateRequisitions' };
 
   if (/^\/(users|roles|settings|activity)(\/|$)/.test(path)) return { action: 'manageUsers' };
 
@@ -48,6 +52,8 @@ export function denialFor(user, rule) {
     return {
       unleashed: 'Your role cannot send to Unleashed or export CSVs.',
       approve: 'Your role cannot approve truck sheets.',
+      uploadCsv: 'Your role cannot upload CSV files — ask a production manager.',
+      generateRequisitions: 'Your role cannot generate requisitions — ask a production manager.',
       samplesSignOff: 'Your role cannot give management sign-off on sample forms.',
       manageUsers: 'Only admins can manage users and roles.',
     }[rule.action];

@@ -4,7 +4,7 @@
 import { api, busy, confirmClick, showError, escapeHtml, fmtTimestamp, lineShortCode, LINE_LABELS, me } from '/common.js';
 
 const AREAS = [['schedule', 'Production Schedule'], ['requisitions', 'Raw Material Requisitions'], ['collections', 'Stock Collections'], ['samples', 'Sample Retention']];
-const ACTIONS = [['unleashed', 'Send to Unleashed / export CSVs'], ['approve', 'Approve truck sheets'], ['samplesSignOff', 'Sign off sample forms'], ['manageUsers', 'Manage users & roles']];
+const ACTIONS = [['uploadCsv', 'Upload CSV files (schedule, collection list)'], ['generateRequisitions', 'Generate requisitions'], ['unleashed', 'Send to Unleashed / export CSVs'], ['approve', 'Approve truck sheets'], ['samplesSignOff', 'Sign off sample forms'], ['manageUsers', 'Manage users & roles']];
 
 const state = { users: [], roles: [], lines: [], site: null, supportSessions: [], editing: null, me: null };
 const $ = (id) => document.getElementById(id);

@@ -218,3 +218,27 @@ test('"Sent by" goes in the Unleashed comments', async () => {
   await sendTransfer(db, client, req.id, { sentBy: 'Paul Admin' });
   assert.match(sent.Comments, /\[PH .+\] · Sent by Paul Admin$/);
 });
+
+test('uploading CSVs and generating requisitions are role actions (Admin and Production manager by default)', async () => {
+  const roles = (await api('GET', '/api/roles')).data;
+  const pm = roles.find((r) => r.name === 'Production manager');
+  const wh = roles.find((r) => r.name === 'Warehouse team');
+  assert.equal(pm.actions.uploadCsv, true);
+  assert.equal(pm.actions.generateRequisitions, true);
+  assert.equal(wh.actions.uploadCsv, false);
+  assert.equal(wh.actions.generateRequisitions, false);
+
+  await api('PATCH', '/api/roles/' + wh.id, { ...wh, areas: { ...wh.areas, requisitions: 'edit', collections: 'edit' } });
+  const u = (await api('POST', '/api/users', { name: 'Store Person', email: 'store@example.com', roleId: wh.id })).data;
+  const cookie = await firstSignIn(app.base, 'store@example.com', u.password, 'store-pass-1');
+  const gen = await api('POST', '/api/requisitions/generate', { date: DATE }, cookie);
+  assert.equal(gen.status, 403);
+  assert.match(gen.data.error, /cannot generate requisitions/);
+  const csv = 'Date,Destination,SKU,Quantity
+2026-10-20,CPT,P500,1
+';
+  assert.equal((await api('POST', '/api/collections/upload', csv, cookie)).status, 403);
+  await api('PATCH', '/api/roles/' + wh.id, { ...wh, areas: { ...wh.areas, requisitions: 'edit', collections: 'edit' }, actions: { ...wh.actions, generateRequisitions: true, uploadCsv: true } });
+  assert.equal((await api('POST', '/api/requisitions/generate', { date: DATE }, cookie)).status, 200);
+  assert.equal((await api('POST', '/api/collections/upload', csv, cookie)).status, 200);
+});

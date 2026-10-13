@@ -21,17 +21,17 @@ const scrypt = promisify(scryptCb);
 
 export const AREAS = ['schedule', 'requisitions', 'collections', 'samples'];
 export const LEVELS = ['none', 'view', 'edit'];
-export const ACTIONS = ['unleashed', 'approve', 'samplesSignOff', 'manageUsers'];
+export const ACTIONS = ['uploadCsv', 'generateRequisitions', 'unleashed', 'approve', 'samplesSignOff', 'manageUsers'];
 
 // What platform support in edit mode (and local dev) can do.
 export const FULL_ACCESS = {
   areas: { schedule: 'edit', requisitions: 'edit', collections: 'edit', samples: 'edit' },
-  actions: { unleashed: true, approve: true, samplesSignOff: true, manageUsers: true },
+  actions: { uploadCsv: true, generateRequisitions: true, unleashed: true, approve: true, samplesSignOff: true, manageUsers: true },
 };
 // Support in view mode: sees everything, changes nothing.
 export const VIEW_ACCESS = {
   areas: { schedule: 'view', requisitions: 'view', collections: 'view', samples: 'view' },
-  actions: { unleashed: false, approve: false, samplesSignOff: false, manageUsers: true },
+  actions: { uploadCsv: false, generateRequisitions: false, unleashed: false, approve: false, samplesSignOff: false, manageUsers: true },
 };
 
 // ---------- passwords ----------
