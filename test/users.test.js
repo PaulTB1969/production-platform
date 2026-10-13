@@ -234,9 +234,7 @@ test('uploading CSVs and generating requisitions are role actions (Admin and Pro
   const gen = await api('POST', '/api/requisitions/generate', { date: DATE }, cookie);
   assert.equal(gen.status, 403);
   assert.match(gen.data.error, /cannot generate requisitions/);
-  const csv = 'Date,Destination,SKU,Quantity
-2026-10-20,CPT,P500,1
-';
+  const csv = ['Date,Destination,SKU,Quantity', '2026-10-20,CPT,P500,1', ''].join('\n');
   assert.equal((await api('POST', '/api/collections/upload', csv, cookie)).status, 403);
   await api('PATCH', '/api/roles/' + wh.id, { ...wh, areas: { ...wh.areas, requisitions: 'edit', collections: 'edit' }, actions: { ...wh.actions, generateRequisitions: true, uploadCsv: true } });
   assert.equal((await api('POST', '/api/requisitions/generate', { date: DATE }, cookie)).status, 200);
