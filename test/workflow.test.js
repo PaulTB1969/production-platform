@@ -295,3 +295,41 @@ test('line sheets: the day per warehouse, filled in with cases and bottle batche
   assert.deepEqual(sheets[1].sections.map((s) => s.heading), ['LWH - Production Schedule', 'AcquaBox']);
   assert.equal((await api('GET', '/api/schedule/linesheets')).status, 400);
 });
+
+test('complete selected: part of a requisition drawn now becomes its own completed requisition; the rest stays open', async () => {
+  const { splitDraw } = await import('../src/domain/requisitions.js');
+  const lines = [{ sku: 'A', qtyUsed: 800, batchNumber: 'X' }, { sku: 'B', qtyUsed: 10 }];
+  assert.deepEqual(splitDraw(lines, [{ index: 0, qty: 500 }]), {
+    drawn: [{ sku: 'A', qtyUsed: 500, batchNumber: 'X' }],
+    remaining: [{ sku: 'A', qtyUsed: 300, batchNumber: 'X' }, { sku: 'B', qtyUsed: 10 }],
+  });
+  assert.throws(() => splitDraw(lines, [{ index: 0, qty: 900 }]), /Only 800/);
+  assert.throws(() => splitDraw(lines, [{ index: 5 }]), /no longer on the requisition/);
+
+  const req = (await api('POST', '/api/requisitions', { date: '2026-10-20', line: 'PRD - LWH' })).data;
+  await api('PATCH', `/api/requisitions/${req.id}`, { lines: [
+    { sku: 'BOTTLE', description: 'Bottle', batchNumber: 'B-SOON', qtyUsed: 200, needsBatch: true },
+    { sku: 'BOTTLE', description: 'Bottle', batchNumber: null, qtyUsed: 100, needsBatch: true },
+    { sku: 'LABEL', description: 'Label', batchNumber: null, qtyUsed: 50, needsBatch: false },
+  ] });
+  // A ticked line still needing a batch can't be completed.
+  const refused = await api('POST', `/api/requisitions/${req.id}/complete-selected`, { picks: [{ index: 1 }] });
+  assert.equal(refused.status, 409);
+  // 120 of the bottles (batch B-SOON) and all the labels now.
+  const r = await api('POST', `/api/requisitions/${req.id}/complete-selected`, { picks: [{ index: 0, qty: 120 }, { index: 2 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.completed.status, 'done');
+  assert.equal(r.data.completed.seq, 2);
+  assert.deepEqual(r.data.completed.lines.map((l) => [l.sku, l.batchNumber, l.qtyUsed]), [['BOTTLE', 'B-SOON', 120], ['LABEL', null, 50]]);
+  assert.equal(r.data.remaining.status, null);
+  assert.deepEqual(r.data.remaining.lines.map((l) => [l.sku, l.batchNumber, l.qtyUsed]), [['BOTTLE', 'B-SOON', 80], ['BOTTLE', null, 100]]);
+  // The drawn batch is now at the line.
+  const stock = (await api('GET', '/api/stock/lines')).data;
+  assert.ok(stock['PRD - LWH|BOTTLE'].batches.some((b) => b.batchNumber === 'B-SOON' && b.quantityRemaining === 120));
+  // Drawing everything that's left just completes the original.
+  await api('PATCH', `/api/requisitions/${req.id}`, { lines: [{ sku: 'BOTTLE', description: 'Bottle', batchNumber: 'B-LATE', qtyUsed: 180, needsBatch: true }] });
+  const last = (await api('POST', `/api/requisitions/${req.id}/complete-selected`, { picks: [{ index: 0 }] })).data;
+  assert.equal(last.remaining, null);
+  assert.equal(last.completed.id, req.id);
+  assert.equal(last.completed.status, 'done');
+});

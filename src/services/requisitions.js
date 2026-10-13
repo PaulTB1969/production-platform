@@ -5,7 +5,7 @@
 import { requisitionFromRow, groupBy, UserError } from './rows.js';
 import { listEntries } from './schedule.js';
 import { recipeMap, balanceMap } from './stock.js';
-import { buildRequisitions, requisitionIssues } from '../domain/requisitions.js';
+import { buildRequisitions, requisitionIssues, splitDraw } from '../domain/requisitions.js';
 import { LINES, requisitionId } from '../domain/lines.js';
 
 const REQ_COLS = `id, to_char(date, 'YYYY-MM-DD') AS date, line, seq, status, transfer_number,
@@ -87,6 +87,39 @@ export async function createRequisition(db, { date, line }) {
     const id = requisitionId(date, line) + (seq > 1 ? '_' + seq : '');
     await q.query('INSERT INTO requisitions (id, date, line, seq) VALUES ($1, $2, $3, $4)', [id, date, line, seq]);
     return getRequisition(q, id);
+  });
+}
+
+// "Complete selected": the raw materials drawn now (all or part of each
+// ticked line) become their own completed requisition — "(2)", "(3)"… — with
+// its own transfer; the rest stays open on this one for the next draw.
+// Drawing everything simply completes this requisition.
+// Returns { completed, remaining } (remaining null when nothing is left).
+export async function completeSelected(db, id, picks) {
+  return db.tx(async (q) => {
+    const req = await getRequisition(q, id);
+    if (!req) throw new UserError('Requisition not found.', 404);
+    if (req.status === 'done') throw new UserError('This requisition is already completed.', 409);
+    if (req.exportedAt) throw new UserError('Already exported to Unleashed — it can no longer change.', 409);
+    if (!Array.isArray(picks) || !picks.length) throw new UserError('Tick the raw materials drawn now first.');
+    let split;
+    try { split = splitDraw(req.lines, picks); } catch (err) { throw new UserError(err.message); }
+    const issues = requisitionIssues({ lines: split.drawn });
+    if (issues.length) throw new UserError('For the ticked raw materials, still need: ' + issues.join(', ') + '.', 409);
+
+    if (!split.remaining.length) {
+      await writeLines(q, id, split.drawn);
+      await q.query("UPDATE requisitions SET status = 'done', updated_at = now() WHERE id = $1", [id]);
+      return { completed: await getRequisition(q, id), remaining: null };
+    }
+    const { m } = (await q.query('SELECT MAX(seq) AS m FROM requisitions WHERE date = $1 AND line = $2', [req.date, req.line])).rows[0];
+    const seq = (m || 0) + 1;
+    const newId = requisitionId(req.date, req.line) + '_' + seq;
+    await q.query("INSERT INTO requisitions (id, date, line, seq, status) VALUES ($1, $2, $3, $4, 'done')", [newId, req.date, req.line, seq]);
+    await writeLines(q, newId, split.drawn);
+    await writeLines(q, id, split.remaining);
+    await q.query('UPDATE requisitions SET updated_at = now() WHERE id = $1', [id]);
+    return { completed: await getRequisition(q, newId), remaining: await getRequisition(q, id) };
   });
 }
 

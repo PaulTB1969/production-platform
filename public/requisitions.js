@@ -18,6 +18,8 @@ const state = {
   lineFilter: null,
   statusFilter: null,
   groupFilter: null,   // Unleashed product group, or NO_GROUP
+  draw: {},            // id -> { line index: qty drawn now } — ticked for "Complete selected"
+  drawNote: {},        // id -> message after a partial completion
 };
 
 // Raw materials are listed by Unleashed product group; NO_GROUP collects the rest.
@@ -122,8 +124,13 @@ function renderJobDetail(id, r, status) {
     out += '<div class="export-note" style="color:var(--danger);">Last send to Unleashed failed: ' + escapeHtml(r.sendError) + '</div>';
   }
   const issues = locked ? [] : requisitionIssues(r);
+  const ticked = Object.keys(state.draw[id] || {}).length;
+  if (state.drawNote[id]) out += '<div class="export-note" style="color:var(--good);">' + escapeHtml(state.drawNote[id]) + '</div>';
   out += '<div class="filter-row">' +
       '<button type="button" class="btn-ghost btn-small" data-pick-list="' + id + '">Pick list (Excel)</button>' +
+      (locked || r.exportedAt ? '' :
+        '<button type="button" class="btn-primary btn-small" data-complete-selected="' + id + '"' + (ticked ? '' : ' disabled title="Tick the raw materials drawn now"') + '>' +
+        'Complete selected' + (ticked ? ' (' + ticked + ')' : '') + '</button>') +
       (r.exportedAt ? '' :
         '<button type="button" class="btn-primary btn-small" data-mark-done="' + id + '" ' + (issues.length ? 'disabled title="Still need: ' + escapeHtml(issues.join(', ')) + '"' : '') + '>' + (locked ? 'Reopen requisition' : 'Completed') + '</button>' +
         '<button type="button" class="btn-danger-ghost btn-small" data-delete="' + id + '">Delete requisition</button>') +
@@ -147,7 +154,8 @@ function renderLinesBlock(id, r, locked) {
   out += shown.map(({ l, idx, g }) => {
     const heading = g === lastGroup ? '' : '<div class="group-head">' + escapeHtml(g) + '</div>';
     lastGroup = g;
-    return heading + renderLine(id, l, idx, locked);
+    // The tick box goes first in the row.
+    return heading + renderLine(id, l, idx, locked).replace('>', '>' + (locked ? '' : drawCell(id, l, idx)));
   }).join('');
   if (!locked) {
     out += '<div class="add-usage">' +
@@ -157,6 +165,15 @@ function renderLinesBlock(id, r, locked) {
     '</div>';
   }
   return out + '</div>';
+}
+
+// Tick = drawn now; the quantity defaults to the whole line and can be less.
+function drawCell(id, l, idx) {
+  const qty = state.draw[id]?.[idx];
+  const on = qty !== undefined;
+  return '<input type="checkbox" class="draw-tick" data-draw="' + id + '" data-idx="' + idx + '"' + (on ? ' checked' : '') +
+      ' title="Drawn now — tick, then Complete selected">' +
+    (on ? '<input type="number" class="qty-input draw-qty" min="0" step="any" max="' + l.qtyUsed + '" value="' + qty + '" data-draw-qty="' + id + '" data-idx="' + idx + '" title="Quantity drawn now">' : '');
 }
 
 function renderLine(id, l, idx, locked) {
@@ -230,6 +247,8 @@ function renderBalanceList() {
 // ---------- mutations ----------
 
 async function save(id, patch) {
+  // Lines changing can move indexes: start the ticks afresh.
+  if ('lines' in patch) delete state.draw[id];
   try {
     state.entries[id] = await api('PATCH', '/requisitions/' + encodeURIComponent(id), patch);
     if ('status' in patch && state.balanceShown) state.balances = await api('GET', '/stock/balances');
@@ -336,6 +355,27 @@ jobList.addEventListener('click', (e) => {
     return;
   }
 
+  const partBtn = e.target.closest('[data-complete-selected]');
+  if (partBtn) {
+    const id = partBtn.dataset.completeSelected;
+    const picks = Object.entries(state.draw[id] || {}).map(([index, qty]) => ({ index: Number(index), qty }));
+    busy(partBtn, 'Completing…', async () => {
+      const { completed, remaining } = await api('POST', '/requisitions/' + encodeURIComponent(id) + '/complete-selected', { picks });
+      delete state.draw[id];
+      state.entries[completed.id] = completed;
+      if (remaining) {
+        state.entries[id] = remaining;
+        state.drawNote[id] = 'Completed as "' + requisitionName(completed) + '" — the rest stays here for the next draw.';
+      } else {
+        state.expanded[id] = false;
+      }
+      if (state.balanceShown) state.balances = await api('GET', '/stock/balances');
+      renderJobList();
+      renderBalanceList();
+    });
+    return;
+  }
+
   const doneBtn = e.target.closest('[data-mark-done]');
   if (doneBtn) {
     const id = doneBtn.dataset.markDone;
@@ -365,6 +405,21 @@ jobList.addEventListener('click', (e) => {
 });
 
 jobList.addEventListener('change', (e) => {
+  const tick = e.target.closest('[data-draw]');
+  if (tick) {
+    const id = tick.dataset.draw;
+    const idx = Number(tick.dataset.idx);
+    const sel = (state.draw[id] ||= {});
+    if (tick.checked) sel[idx] = state.entries[id].lines[idx].qtyUsed; else delete sel[idx];
+    delete state.drawNote[id];
+    renderJobList();
+    return;
+  }
+  const dq = e.target.closest('[data-draw-qty]');
+  if (dq) {
+    state.draw[dq.dataset.drawQty][Number(dq.dataset.idx)] = dq.value === '' ? null : Number(dq.value);
+    return;
+  }
   const q = e.target.closest('[data-edit-qty]');
   if (!q) return;
   const lines = linesOf(q.dataset.editQty);

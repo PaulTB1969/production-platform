@@ -66,6 +66,7 @@ const LABELS = [
   [/^POST \/requisitions\/generate$/, 'Generated requisitions'],
   [/^POST \/requisitions$/, 'Added a requisition'],
   [/^PATCH \/requisitions\/[^/]+$/, 'Updated a requisition'],
+  [/^POST \/requisitions\/[^/]+\/complete-selected$/, 'Completed part of a requisition'],
   [/^DELETE \/requisitions\/[^/]+$/, 'Deleted a requisition'],
   [/^POST \/exports\/assemblies$/, 'Exported the assemblies CSV'],
   [/^POST \/exports\/wastage$/, 'Exported the wastage CSV'],

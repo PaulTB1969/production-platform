@@ -83,6 +83,34 @@ export function requisitionIssues(req) {
   return [];
 }
 
+// Drawing part of a requisition: picks = [{ index, qty }] (qty omitted = the
+// whole line). Returns the lines drawn now and what stays for later; a line
+// drawn in part leaves its remainder (same batch) behind. Throws on a bad pick.
+export function splitDraw(lines, picks) {
+  const byIdx = new Map();
+  for (const p of picks || []) {
+    const i = Number(p.index);
+    const line = lines[i];
+    if (!Number.isInteger(i) || !line) throw new Error('That raw material is no longer on the requisition — reload the page.');
+    if (byIdx.has(i)) throw new Error(`${line.sku} is selected twice.`);
+    const full = Number(line.qtyUsed) || 0;
+    const qty = p.qty === undefined || p.qty === null || p.qty === '' ? full : Number(p.qty);
+    if (!(qty > 0)) throw new Error(`Enter how much of ${line.sku} is drawn now.`);
+    if (qty > full + 1e-9) throw new Error(`Only ${full} of ${line.sku} is on the requisition — ${qty} can't be drawn.`);
+    byIdx.set(i, qty);
+  }
+  const drawn = [];
+  const remaining = [];
+  lines.forEach((l, i) => {
+    if (!byIdx.has(i)) { remaining.push({ ...l }); return; }
+    const take = byIdx.get(i);
+    drawn.push({ ...l, qtyUsed: take });
+    const left = Math.round(((Number(l.qtyUsed) || 0) - take) * 1e6) / 1e6;
+    if (left > 0) remaining.push({ ...l, qtyUsed: left });
+  });
+  return { drawn, remaining };
+}
+
 // Assigns a batch to line `idx`. With qty below the line's full quantity,
 // splits that amount off onto the batch (merging into an existing line for
 // the same sku + batch), so one material can be spread over several batches.

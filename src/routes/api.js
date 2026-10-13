@@ -156,6 +156,11 @@ export function apiRouter({ db, platformDb, config, unleashed }) {
     await checkRowLine(req, 'requisitions', req.params.id);
     res.json(await reqs.updateRequisition(db, req.params.id, req.body || {}));
   });
+  // Complete only the raw materials drawn now (see completeSelected).
+  r.post('/requisitions/:id/complete-selected', async (req, res) => {
+    await checkRowLine(req, 'requisitions', req.params.id);
+    res.json(await reqs.completeSelected(db, req.params.id, req.body?.picks));
+  });
   r.delete('/requisitions/:id', async (req, res) => {
     await checkRowLine(req, 'requisitions', req.params.id);
     await reqs.deleteRequisition(db, req.params.id);
