@@ -587,67 +587,64 @@ document.getElementById('addVehicleBtn').addEventListener('click', (e) => busy(e
 renderVehicles().catch(() => {});
 
 // ---------- the list as an image (for WhatsApp) ----------
-// Destinations, SKUs and Qty Req only — no vehicle columns — drawn on a
-// canvas. Phones get the share sheet (pick WhatsApp); elsewhere it downloads.
+// One plain table per destination — SKU and Qty Req only, laid out like the
+// paper sheets — drawn on a canvas. Phones get the share sheet (pick
+// WhatsApp); elsewhere it downloads.
 
 function listImage() {
   const cs = state.day.collections.filter((c) => c.lines.length);
-  const scale = 2;                       // sharp on phones
-  const W = 720, pad = 28, rowH = 30, headH = 40, gap = 18;
-  const title = 'Stock Collection — ' + new Date(state.date + 'T00:00:00').toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-  let H = pad + 44 + 10;
+  const scale = 2;                         // sharp on phones
+  const pad = 20, colSku = 300, colQty = 110, W = pad * 2 + colSku + colQty;
+  const rowH = 24, headH = 26, gap = 18, titleH = 26;
+  const font = (w, px) => `${w} ${px}px Calibri, Carlito, Arial, sans-serif`;
+  const dateText = String(state.date).replace(/-/g, '/');
+  let H = pad + titleH + 14;
   for (const c of cs) H += headH + c.lines.length * rowH + gap;
-  H += 30 + pad;
+  H += pad - gap;
 
   const cv = document.createElement('canvas');
   cv.width = W * scale; cv.height = H * scale;
   const g = cv.getContext('2d');
   g.scale(scale, scale);
-  const font = (w, px) => `${w} ${px}px Inter, "Segoe UI", Arial, sans-serif`;
   g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
   g.textBaseline = 'middle';
 
-  g.fillStyle = '#000'; g.font = font(700, 22);
-  g.fillText(title, pad, pad + 16);
-  let y = pad + 44 + 10;
+  // Title, in a grey box like the paper forms.
+  const title = 'Stock Collection - ' + dateText;
+  g.font = font(700, 15);
+  g.fillStyle = '#d9d9d9'; g.fillRect(pad, pad, Math.max(220, g.measureText(title).width + 16), titleH);
+  g.fillStyle = '#000'; g.fillText(title, pad + 6, pad + titleH / 2);
+  let y = pad + titleH + 14;
 
-  const right = W - pad;
+  const x0 = pad, x1 = pad + colSku, x2 = pad + colSku + colQty;
   for (const c of cs) {
-    // Section heading bar.
-    g.fillStyle = '#f2f2f2'; g.fillRect(pad, y, W - pad * 2, headH);
-    g.fillStyle = '#000'; g.font = font(700, 16);
-    g.fillText(c.destination, pad + 12, y + headH / 2);
-    const dw = g.measureText(c.destination).width;
-    g.fillStyle = '#6e6e6e'; g.font = font(400, 14);
-    g.fillText('· ' + c.label, pad + 20 + dw, y + headH / 2);
-    g.fillStyle = '#6e6e6e'; g.font = font(600, 12); g.textAlign = 'right';
-    g.fillText('QTY REQ', right - 12, y + headH / 2);
-    g.textAlign = 'left';
+    const top = y;
+    // Header row.
+    g.fillStyle = '#d9d9d9'; g.fillRect(x0, y, x2 - x0, headH);
+    g.fillStyle = '#000'; g.font = font(400, 15);
+    g.fillText(c.destination + ' - Stock Collection', x0 + 5, y + headH / 2);
+    g.textAlign = 'center'; g.fillText('Qty Req', (x1 + x2) / 2, y + headH / 2); g.textAlign = 'left';
     y += headH;
+    g.strokeStyle = '#000'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x0, y); g.lineTo(x2, y); g.stroke();
     for (const l of c.lines) {
-      g.fillStyle = '#000'; g.font = font(500, 15);
-      g.fillText(l.sku, pad + 12, y + rowH / 2);
-      const sw = g.measureText(l.sku).width;
-      if (l.description && l.description !== l.sku) {
-        g.fillStyle = '#8f8f8f'; g.font = font(400, 12);
-        let d = l.description;
-        const room = right - 100 - (pad + 24 + sw);
-        while (d.length > 3 && g.measureText(d).width > room) d = d.slice(0, -2);
-        if (d !== l.description) d = d.trimEnd() + '…';
-        g.fillText(d, pad + 24 + sw, y + rowH / 2 + 1);
-      }
-      g.fillStyle = '#000'; g.font = font(700, 15); g.textAlign = 'right';
-      g.fillText(fmtNum(l.qty), right - 12, y + rowH / 2);
-      g.textAlign = 'left';
-      g.strokeStyle = '#e6e6e6'; g.lineWidth = 1;
-      g.beginPath(); g.moveTo(pad, y + rowH - 0.5); g.lineTo(right, y + rowH - 0.5); g.stroke();
+      g.fillStyle = '#000'; g.font = font(400, 15);
+      let sku = l.sku;
+      while (sku.length > 3 && g.measureText(sku).width > colSku - 10) sku = sku.slice(0, -1);
+      g.fillText(sku, x0 + 5, y + rowH / 2);
+      g.textAlign = 'right'; g.fillText(fmtNum(l.qty), x2 - 5, y + rowH / 2); g.textAlign = 'left';
       y += rowH;
+      // Thin blue line between rows, as on the sheets.
+      g.strokeStyle = '#4aa3df'; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x0, y - 0.5); g.lineTo(x2, y - 0.5); g.stroke();
     }
+    // Outer border and the column divider.
+    g.strokeStyle = '#000'; g.lineWidth = 2;
+    g.strokeRect(x0, top, x2 - x0, y - top);
+    g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x1, top); g.lineTo(x1, y); g.stroke();
     y += gap;
   }
-  g.fillStyle = '#8f8f8f'; g.font = font(400, 12);
-  const total = cs.reduce((n, c) => n + c.lines.reduce((m, l) => m + Number(l.qty || 0), 0), 0);
-  g.fillText(cs.length + ' destination(s) · ' + cs.reduce((n, c) => n + c.lines.length, 0) + ' line(s) · ' + fmtNum(total) + ' units', pad, y + 10);
   return cv;
 }
 
