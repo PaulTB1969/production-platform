@@ -585,3 +585,84 @@ document.getElementById('addVehicleBtn').addEventListener('click', (e) => busy(e
 }));
 
 renderVehicles().catch(() => {});
+
+// ---------- the list as an image (for WhatsApp) ----------
+// Destinations, SKUs and Qty Req only — no vehicle columns — drawn on a
+// canvas. Phones get the share sheet (pick WhatsApp); elsewhere it downloads.
+
+function listImage() {
+  const cs = state.day.collections.filter((c) => c.lines.length);
+  const scale = 2;                       // sharp on phones
+  const W = 720, pad = 28, rowH = 30, headH = 40, gap = 18;
+  const title = 'Stock Collection — ' + new Date(state.date + 'T00:00:00').toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  let H = pad + 44 + 10;
+  for (const c of cs) H += headH + c.lines.length * rowH + gap;
+  H += 30 + pad;
+
+  const cv = document.createElement('canvas');
+  cv.width = W * scale; cv.height = H * scale;
+  const g = cv.getContext('2d');
+  g.scale(scale, scale);
+  const font = (w, px) => `${w} ${px}px Inter, "Segoe UI", Arial, sans-serif`;
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+  g.textBaseline = 'middle';
+
+  g.fillStyle = '#000'; g.font = font(700, 22);
+  g.fillText(title, pad, pad + 16);
+  let y = pad + 44 + 10;
+
+  const right = W - pad;
+  for (const c of cs) {
+    // Section heading bar.
+    g.fillStyle = '#f2f2f2'; g.fillRect(pad, y, W - pad * 2, headH);
+    g.fillStyle = '#000'; g.font = font(700, 16);
+    g.fillText(c.destination, pad + 12, y + headH / 2);
+    const dw = g.measureText(c.destination).width;
+    g.fillStyle = '#6e6e6e'; g.font = font(400, 14);
+    g.fillText('· ' + c.label, pad + 20 + dw, y + headH / 2);
+    g.fillStyle = '#6e6e6e'; g.font = font(600, 12); g.textAlign = 'right';
+    g.fillText('QTY REQ', right - 12, y + headH / 2);
+    g.textAlign = 'left';
+    y += headH;
+    for (const l of c.lines) {
+      g.fillStyle = '#000'; g.font = font(500, 15);
+      g.fillText(l.sku, pad + 12, y + rowH / 2);
+      const sw = g.measureText(l.sku).width;
+      if (l.description && l.description !== l.sku) {
+        g.fillStyle = '#8f8f8f'; g.font = font(400, 12);
+        let d = l.description;
+        const room = right - 100 - (pad + 24 + sw);
+        while (d.length > 3 && g.measureText(d).width > room) d = d.slice(0, -2);
+        if (d !== l.description) d = d.trimEnd() + '…';
+        g.fillText(d, pad + 24 + sw, y + rowH / 2 + 1);
+      }
+      g.fillStyle = '#000'; g.font = font(700, 15); g.textAlign = 'right';
+      g.fillText(fmtNum(l.qty), right - 12, y + rowH / 2);
+      g.textAlign = 'left';
+      g.strokeStyle = '#e6e6e6'; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(pad, y + rowH - 0.5); g.lineTo(right, y + rowH - 0.5); g.stroke();
+      y += rowH;
+    }
+    y += gap;
+  }
+  g.fillStyle = '#8f8f8f'; g.font = font(400, 12);
+  const total = cs.reduce((n, c) => n + c.lines.reduce((m, l) => m + Number(l.qty || 0), 0), 0);
+  g.fillText(cs.length + ' destination(s) · ' + cs.reduce((n, c) => n + c.lines.length, 0) + ' line(s) · ' + fmtNum(total) + ' units', pad, y + 10);
+  return cv;
+}
+
+document.getElementById('shareListBtn').addEventListener('click', (e) => busy(e.target, 'Making image…', async () => {
+  if (!state.day?.collections.some((c) => c.lines.length)) throw new Error('No collection list for this date yet.');
+  await document.fonts?.ready;
+  const blob = await new Promise((res) => listImage().toBlob(res, 'image/png'));
+  const file = new File([blob], `Stock collection ${state.date}.png`, { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: file.name }); return; }
+    catch (err) { if (err.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}));
