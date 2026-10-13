@@ -333,3 +333,35 @@ test('complete selected: part of a requisition drawn now becomes its own complet
   assert.equal(last.completed.id, req.id);
   assert.equal(last.completed.status, 'done');
 });
+
+test('split production item: by cases (interim), and automatically per component batch', async () => {
+  const { shareOut, planBatchSplit } = await import('../src/domain/schedule.js');
+  assert.deepEqual(shareOut(84, [1500, 516]), [62, 22]);
+  assert.deepEqual(shareOut(10, [1, 1, 1]), [3, 3, 4]);
+  assert.throws(() => planBatchSplit({ plannedCases: 2, componentUsage: [] }, 'BOTTLE', [{ batchNumber: 'A', qty: 1 }, { batchNumber: 'B', qty: 1 }, { batchNumber: 'C', qty: 1 }]), /no cases/);
+
+  const D = '2026-10-21';
+  // 1. 160 planned, 80 made for an interim transfer: the other 80 split off.
+  const j = (await api('POST', '/api/schedule', { sku: 'P500', line: 'PRD - UWH', plannedCases: 160, date: D })).data;
+  await api('PATCH', `/api/schedule/${j.id}`, { actualCases: 80, startTime: '07:00' });
+  const s1 = (await api('POST', `/api/schedule/${j.id}/split`, { moveQty: 80 })).data;
+  assert.deepEqual([s1.source.plannedCases, s1.source.actualCases, s1.created.plannedCases, s1.created.seq], [80, 80, 80, 2]);
+
+  // 2. 84 cases, bottles from two batches -> two items, cases and other parts shared.
+  const k = (await api('POST', '/api/schedule', { sku: 'P500', line: 'PRD - LWH', plannedCases: 84, date: D })).data;
+  await api('PATCH', `/api/schedule/${k.id}`, { actualCases: 84 });
+  const fam = await api('POST', `/api/schedule/${k.id}/split-by-batches`, {
+    componentSku: 'BOTTLE', batches: [{ batchNumber: 'B-SOON', qty: 1500, wastage: 6 }, { batchNumber: 'B-LATE', qty: 516, wastage: 0 }],
+  });
+  assert.equal(fam.status, 200, JSON.stringify(fam.data));
+  const items = fam.data.sort((a, b) => a.seq - b.seq);
+  assert.deepEqual(items.map((e) => [e.seq, e.plannedCases, e.actualCases]), [[1, 62, 62], [2, 22, 22]]);
+  const bottles = (e) => e.componentUsage.filter((u) => u.componentSku === 'BOTTLE').map((u) => [u.batchNumber, u.qtyUsed, u.wastage]);
+  assert.deepEqual(bottles(items[0]), [['B-SOON', 1500, 6]]);
+  assert.deepEqual(bottles(items[1]), [['B-LATE', 516, 0]]);
+  // Labels (not batch-tracked) follow each item's cases: 62 x 24 and 22 x 24.
+  const labels = (e) => e.componentUsage.find((u) => u.componentSku === 'LABEL')?.qtyUsed;
+  assert.deepEqual([labels(items[0]), labels(items[1])], [1488, 528]);
+  // Not a batch-tracked part: refused.
+  assert.equal((await api('POST', `/api/schedule/${k.id}/split-by-batches`, { componentSku: 'LABEL', batches: [{ batchNumber: 'x', qty: 1 }, { batchNumber: 'y', qty: 1 }] })).status, 400);
+});

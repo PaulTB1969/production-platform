@@ -65,7 +65,8 @@ export function denialFor(user, rule) {
 const LABELS = [
   [/^POST \/schedule\/upload$/, 'Uploaded the production schedule'],
   [/^POST \/schedule\/reorder$/, 'Reordered the production schedule'],
-  [/^POST \/schedule\/[^/]+\/split$/, 'Split a job'],
+  [/^POST \/schedule\/[^/]+\/split$/, 'Split a production item'],
+  [/^POST \/schedule\/[^/]+\/split-by-batches$/, 'Split a production item by batch'],
   [/^POST \/schedule$/, 'Added a job'],
   [/^PATCH \/schedule\/[^/]+$/, 'Updated a job'],
   [/^DELETE \/schedule\/[^/]+$/, 'Deleted a job'],

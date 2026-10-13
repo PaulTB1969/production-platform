@@ -3,7 +3,7 @@
 
 import { entryFromRow, groupBy, UserError } from './rows.js';
 import { getRecipe } from './stock.js';
-import { computeEntryStatus, syncNonBatchTrackedUsage, newEntryId } from '../domain/schedule.js';
+import { computeEntryStatus, syncNonBatchTrackedUsage, newEntryId, planBatchSplit } from '../domain/schedule.js';
 import { SCHEDULE_LINES } from '../domain/lines.js';
 import { parseFlexibleDate } from '../domain/csv.js';
 
@@ -133,7 +133,44 @@ export async function updateEntry(db, id, patch) {
   });
 }
 
-// "Split into new batch": moves `moveQty` planned cases onto a new sibling
+// A component chosen from several batches (the batch pop-up): one production
+// item per batch — this job keeps the first, new items in its split family
+// take the others (see planBatchSplit). Returns every item of the family.
+export async function splitByBatches(db, id, componentSku, batches) {
+  return db.tx(async (q) => {
+    const src = await getEntry(q, id);
+    if (!src) throw new UserError('Job not found.', 404);
+    if (src.exportedAt || src.unleashedGuid) throw new UserError('Already exported to Unleashed — it can no longer be split.', 409);
+    const recipe = await getRecipe(q, src.sku);
+    const line = recipe?.lines.find((l) => l.componentSku === componentSku);
+    if (!line || line.isBatchTracked === false) throw new UserError(`${componentSku} isn't a batch-tracked part of ${src.sku}.`);
+    let items;
+    try { items = planBatchSplit(src, componentSku, batches || []); } catch (err) { throw new UserError(err.message); }
+
+    const save = async (entryId, item) => {
+      const usage = syncNonBatchTrackedUsage({ ...src, actualCases: item.actualCases, componentUsage: item.componentUsage }, recipe);
+      await q.query('UPDATE schedule_entries SET planned_cases = $2, actual_cases = $3, updated_at = now() WHERE id = $1',
+        [entryId, item.plannedCases, item.actualCases]);
+      await writeUsage(q, entryId, usage);
+    };
+    await save(id, items[0]);
+    const maxSeq = (await q.query('SELECT MAX(seq) AS m FROM schedule_entries WHERE group_id = $1', [src.groupId])).rows[0].m || 1;
+    for (const [i, item] of items.slice(1).entries()) {
+      const newId = newEntryId();
+      await insertEntry(q, {
+        id: newId, sku: src.sku, line: src.line, date: src.date, plannedCases: item.plannedCases,
+        groupId: src.groupId, seq: maxSeq + 1 + i, runOrder: src.runOrder,
+      });
+      // Made at the same time as the original: same times, notes and state.
+      await q.query('UPDATE schedule_entries SET start_time = $2, end_time = $3, notes = $4, status = $5 WHERE id = $1',
+        [newId, src.startTime, src.endTime, src.notes, src.status]);
+      await save(newId, item);
+    }
+    return listEntries(q, { date: src.date }).then((all) => all.filter((e) => e.groupId === src.groupId));
+  });
+}
+
+// "Split production item": moves `moveQty` planned cases onto a new sibling
 // job (same group, next seq) — for a bottle/cap batch change mid-run.
 export async function splitEntry(db, id, moveQty) {
   return db.tx(async (q) => {

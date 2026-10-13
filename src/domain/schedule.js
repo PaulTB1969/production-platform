@@ -38,6 +38,53 @@ export function syncNonBatchTrackedUsage(entry, recipe) {
   return usage;
 }
 
+// Shares `total` by `weights`: each share rounded down (whole numbers when
+// the total is whole, otherwise to 3 decimals), the remainder to the last.
+export function shareOut(total, weights) {
+  const t = Number(total) || 0;
+  const sum = weights.reduce((a, w) => a + (Number(w) || 0), 0);
+  const whole = Number.isInteger(t);
+  const r3 = (x) => Math.round(x * 1000) / 1000;
+  const out = weights.map((w) => {
+    if (!(sum > 0)) return 0;
+    const x = (t * (Number(w) || 0)) / sum;
+    return whole ? Math.floor(x + 1e-9) : r3(Math.floor(x * 1000 + 1e-6) / 1000);
+  });
+  if (out.length) out[out.length - 1] = r3(t - out.slice(0, -1).reduce((a, x) => a + x, 0));
+  return out;
+}
+
+// A component drawn from several batches: one production item per batch, so
+// each finished-goods batch traces to one component batch. Cases (planned,
+// and produced when entered) are shared by each batch's share of the
+// component; every other component's usage and wastage by the cases.
+// batches: [{ batchNumber, qty, wastage }] (2 or more). Returns one
+// { plannedCases, actualCases, componentUsage } per batch, in batch order.
+export function planBatchSplit(entry, componentSku, batches) {
+  const weights = batches.map((b) => Number(b.qty) || 0);
+  if (batches.length < 2) throw new Error('Splitting needs two or more batches.');
+  if (weights.some((w) => !(w > 0))) throw new Error('Every batch needs a quantity used to split the item.');
+  const planned = shareOut(entry.plannedCases, weights);
+  const actual = hasValue(entry.actualCases) ? shareOut(entry.actualCases, weights) : null;
+  if (planned.some((c) => !(c >= 1))) {
+    throw new Error(`${entry.plannedCases} cases can't be shared over ${batches.length} batches this way — some item would get no cases.`);
+  }
+  const byCases = actual || planned;
+  const items = batches.map((b, i) => ({
+    plannedCases: planned[i],
+    actualCases: actual ? actual[i] : null,
+    componentUsage: [{ componentSku, batchNumber: b.batchNumber, qtyUsed: Number(b.qty) || 0, wastage: Number(b.wastage) || 0 }],
+  }));
+  for (const u of (entry.componentUsage || []).filter((x) => x.componentSku !== componentSku)) {
+    const used = shareOut(u.qtyUsed || 0, byCases);
+    const wasted = shareOut(u.wastage || 0, byCases);
+    items.forEach((it, i) => {
+      if (used[i] || wasted[i] || !u.batchNumber) it.componentUsage.push({ ...u, qtyUsed: used[i], wastage: wasted[i] });
+    });
+  }
+  return items;
+}
+
 // Adding the same batch twice sums onto the existing usage line.
 export function addUsage(usage, { componentSku, batchNumber, qtyUsed = 0, wastage = 0 }) {
   const out = (usage || []).map((u) => ({ ...u }));

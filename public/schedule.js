@@ -193,9 +193,12 @@ function renderJobDetail(id, entry, recipe, status) {
     const lines = recipe.lines.slice().sort((a, b) => (a.isBatchTracked === false) - (b.isBatchTracked === false));
     out += lines.map((line) => renderComponentBlock(id, entry, line)).join('');
   }
+  // Split production item: with cases produced entered (e.g. 80 of 160 for an
+  // interim transfer), the rest (80) is filled in to become a new item.
+  const rest = hasValue(entry.actualCases) && entry.actualCases < entry.plannedCases ? entry.plannedCases - entry.actualCases : '';
   out += '<div class="add-usage">' +
-      '<input type="number" min="1" step="1" placeholder="cases to move" data-split-qty="' + id + '">' +
-      '<button type="button" class="btn-ghost btn-small" data-split="' + id + '">Split into new batch</button>' +
+      '<input type="number" min="1" step="1" placeholder="cases to move" value="' + rest + '" data-split-qty="' + id + '" title="Cases for the new production item">' +
+      '<button type="button" class="btn-ghost btn-small" data-split="' + id + '">Split production item</button>' +
     '</div>';
 
   const duration = fmtDuration(entry.startTime, entry.endTime);
@@ -341,6 +344,26 @@ async function pickBatches(id, componentSku) {
     qtyLabel: 'Qty used',
   });
   if (!picked) return;
+  // Two or more batches: one production item per batch, automatically.
+  if (picked.length > 1) {
+    try {
+      const family = await api('POST', '/schedule/' + encodeURIComponent(id) + '/split-by-batches', {
+        componentSku, batches: picked.map((p) => ({ batchNumber: p.batchNumber, qty: p.qty, wastage: p.wastage })),
+      });
+      for (const e of family) state.entries[e.id] = e;
+      await refreshLineBatches();
+      state.expanded = { [id]: true };
+      state.notice = { id, text: 'Split into ' + picked.length + ' production items, one per ' + componentSku + ' batch: ' +
+        family.filter((e) => picked.some((p) => e.componentUsage.some((u) => u.componentSku === componentSku && u.batchNumber === p.batchNumber)))
+          .map((e) => finishedBatch(e) + ' (' + fmtNum(hasValue(e.actualCases) ? e.actualCases : e.plannedCases) + ' cases)').join(', ') + '.' };
+    } catch (err) {
+      state.expanded = { [id]: true };
+      state.notice = { id, text: err.message };
+    }
+    renderJobList();
+    showNotice();
+    return;
+  }
   const others = (entry.componentUsage || []).filter((u) => u.componentSku !== componentSku);
   await save(id, { componentUsage: [...others, ...picked.map((p) => ({ componentSku, batchNumber: p.batchNumber, qtyUsed: p.qty, wastage: p.wastage }))] });
 }

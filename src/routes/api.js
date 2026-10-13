@@ -112,6 +112,11 @@ export function apiRouter({ db, platformDb, config, unleashed }) {
     await checkRowLine(req, 'schedule_entries', req.params.id);
     res.status(201).json(await schedule.splitEntry(db, req.params.id, req.body?.moveQty));
   });
+  // A component chosen from several batches: one production item per batch.
+  r.post('/schedule/:id/split-by-batches', async (req, res) => {
+    await checkRowLine(req, 'schedule_entries', req.params.id);
+    res.json(await schedule.splitByBatches(db, req.params.id, req.body?.componentSku, req.body?.batches));
+  });
   r.delete('/schedule/:id', async (req, res) => {
     await checkRowLine(req, 'schedule_entries', req.params.id);
     await schedule.deleteEntry(db, req.params.id);
